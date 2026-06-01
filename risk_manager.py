@@ -125,7 +125,7 @@ class RiskManager:
         if current_balance <= 0:
             return (
                 False,
-                "No perps balance — transfer USDC Spot→Perps on Hyperliquid (bot trades ETH perps only)",
+                "No available USDC balance for trading",
             )
 
         if self._state is None:

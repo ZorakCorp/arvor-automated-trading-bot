@@ -53,6 +53,7 @@ class HyperliquidClient:
         self._wallet_address: str = ""
         self._sz_decimals = ETH_SIZE_DECIMALS
         self._min_order_size = MIN_ETH_ORDER_SIZE
+        self._unified_account: bool | None = None
 
         if settings.is_paper:
             self._load_paper_state()
@@ -108,6 +109,50 @@ class HyperliquidClient:
             )
         else:
             logger.info("Wallet address: %s", self._wallet_address)
+
+        self._is_unified_account()
+
+    def _is_unified_account(self) -> bool:
+        """Hyperliquid unified accounts merge spot + perps (no Spot→Perp transfer)."""
+        if self._unified_account is not None:
+            return self._unified_account
+        if self.settings.is_paper or self._info is None:
+            self._unified_account = False
+            return False
+        try:
+            mode = self._info.query_user_abstraction_state(self._wallet_address)
+            mode_str = (mode if isinstance(mode, str) else str(mode)).lower()
+            self._unified_account = mode_str in (
+                "unifiedaccount",
+                "portfoliomargin",
+            )
+        except Exception as exc:
+            logger.debug("Could not query account abstraction: %s", exc)
+            self._unified_account = False
+        if self._unified_account:
+            logger.info(
+                "Hyperliquid unified account — Spot and Perps share one USDC balance "
+                "(no manual Spot→Perp transfer needed)"
+            )
+        return self._unified_account
+
+    def _effective_usd_balances(
+        self, state: dict, spot_usdc: float
+    ) -> tuple[float, float]:
+        """
+        Return (account_value, available_for_trading).
+        Unified accounts: perps withdrawable may read $0 while spot holds funds.
+        """
+        margin = state.get("marginSummary", {})
+        account_value = self._to_float(margin.get("accountValue"))
+        withdrawable = self._to_float(state.get("withdrawable"), account_value)
+
+        if self._is_unified_account():
+            available = max(withdrawable, account_value, spot_usdc)
+            balance = account_value if account_value > 0 else available
+            return balance, available
+
+        return account_value, withdrawable
 
     def _load_min_order_size(self) -> None:
         try:
@@ -197,17 +242,27 @@ class HyperliquidClient:
             )
 
         state = self._info.user_state(self._wallet_address)
-        margin = state.get("marginSummary", {})
-        balance = self._to_float(margin.get("accountValue"))
-        withdrawable = self._to_float(state.get("withdrawable"), balance)
         spot_usdc = self._get_spot_usdc_available()
+        balance, available = self._effective_usd_balances(state, spot_usdc)
 
-        if spot_usdc > 0 and withdrawable < 0.01:
+        if self._is_unified_account():
+            if available >= 0.01:
+                logger.info(
+                    "Unified balance: $%.2f available for ETH perps (spot USDC $%.2f)",
+                    available,
+                    spot_usdc,
+                )
+            elif spot_usdc < 0.01 and balance < 0.01:
+                logger.warning(
+                    "No USDC balance for %s — deposit on Hyperliquid.",
+                    self._wallet_address,
+                )
+        elif spot_usdc > 0 and available < 0.01:
             logger.warning(
                 "You have $%.2f USDC in SPOT but $%.2f in PERPS. "
                 "Bot will auto-transfer Spot→Perps if AUTO_SPOT_TO_PERP=true.",
                 spot_usdc,
-                withdrawable,
+                available,
             )
         elif balance < 0.01 and spot_usdc < 0.01:
             logger.warning(
@@ -219,7 +274,7 @@ class HyperliquidClient:
                 "Balances for %s — perps: $%.2f (withdrawable $%.2f) | spot USDC: $%.2f",
                 self._wallet_address[:10] + "...",
                 balance,
-                withdrawable,
+                available,
                 spot_usdc,
             )
 
@@ -247,7 +302,7 @@ class HyperliquidClient:
 
         return AccountSnapshot(
             balance_usd=balance,
-            available_usd=withdrawable,
+            available_usd=available,
             position=position,
         )
 
@@ -256,8 +311,12 @@ class HyperliquidClient:
         Move available spot USDC to perps via Hyperliquid API.
         Use when UI transfer is blocked or unavailable.
         Requires private key to match HYPERLIQUID_WALLET_ADDRESS (main wallet).
+        Not used on Hyperliquid unified accounts.
         """
         if self.settings.is_paper or not self.settings.auto_spot_to_perp:
+            return False
+
+        if self._is_unified_account():
             return False
 
         spot = self._get_spot_usdc_available()
