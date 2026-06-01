@@ -1,5 +1,5 @@
-# Optional Railway / Docker deployment with Playwright preinstalled
-FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
+# Playwright Python image version MUST match playwright== in requirements.txt
+FROM mcr.microsoft.com/playwright/python:v1.60.0-jammy
 
 WORKDIR /app
 
