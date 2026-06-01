@@ -13,10 +13,10 @@ from typing import Any
 from openai import OpenAI
 
 from config import Settings
+from security_utils import MAX_SCREENSHOT_BYTES, validate_eth_price
 
 logger = logging.getLogger(__name__)
 
-# Prompt tuned for "Nested Fractal - Clean" Pine indicator on TradingView ETH 5m
 AI_PROMPT = """You are an expert ETH futures trader reading a TradingView screenshot.
 
 The chart uses the custom indicator "Nested Fractal - Clean" (Nested Fractal).
@@ -84,7 +84,7 @@ Examples:
 class TradeSignal:
     """Parsed AI trade decision."""
 
-    action: str  # LONG, SHORT, NO_TRADE
+    action: str
     entry: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
@@ -92,39 +92,48 @@ class TradeSignal:
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    """Extract JSON object from model response."""
+    """Extract first valid JSON object from model response."""
     text = text.strip()
     if not text:
         return None
 
     try:
-        return json.loads(text)
+        obj, _ = json.JSONDecoder().raw_decode(text)
+        if isinstance(obj, dict):
+            return obj
     except json.JSONDecodeError:
         pass
 
     fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
     if fenced:
         try:
-            return json.loads(fenced.group(1).strip())
+            obj, _ = json.JSONDecoder().raw_decode(fenced.group(1).strip())
+            if isinstance(obj, dict):
+                return obj
         except json.JSONDecodeError:
             pass
 
-    match = re.search(r"\{[\s\S]*\}", text)
-    if match:
+    start = text.find("{")
+    while start != -1:
         try:
-            return json.loads(match.group(0))
+            obj, end = json.JSONDecoder().raw_decode(text[start:])
+            if isinstance(obj, dict):
+                return obj
         except json.JSONDecodeError:
-            return None
+            pass
+        start = text.find("{", start + 1)
     return None
 
 
 def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | None:
-    """
-    Send screenshot to OpenAI and return TradeSignal.
-    Returns None if API fails or JSON is invalid.
-    """
+    """Send screenshot to OpenAI and return TradeSignal."""
     if not screenshot_path.exists():
         logger.error("Screenshot not found: %s", screenshot_path)
+        return None
+
+    size = screenshot_path.stat().st_size
+    if size > MAX_SCREENSHOT_BYTES:
+        logger.error("Screenshot too large (%d bytes, max %d)", size, MAX_SCREENSHOT_BYTES)
         return None
 
     try:
@@ -134,7 +143,7 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
         logger.error("Could not read screenshot: %s", exc)
         return None
 
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = OpenAI(api_key=settings.openai_api_key, timeout=120.0)
 
     try:
         response = client.chat.completions.create(
@@ -161,8 +170,12 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
         logger.error("OpenAI API call failed: %s", exc)
         return None
 
+    if not response.choices:
+        logger.error("OpenAI returned empty choices")
+        return None
+
     raw = (response.choices[0].message.content or "").strip()
-    logger.debug("AI raw response: %s", raw)
+    logger.debug("AI raw response: %s", raw[:200])
 
     data = _extract_json(raw)
     if data is None:
@@ -183,15 +196,11 @@ def parse_trade_signal(data: dict[str, Any], raw: str = "") -> TradeSignal | Non
         return TradeSignal(action="NO_TRADE", raw_response=raw)
 
     try:
-        entry = float(data["entry"])
-        stop_loss = float(data["stop_loss"])
-        take_profit = float(data["take_profit"])
+        entry = validate_eth_price(float(data["entry"]), "entry")
+        stop_loss = validate_eth_price(float(data["stop_loss"]), "stop_loss")
+        take_profit = validate_eth_price(float(data["take_profit"]), "take_profit")
     except (KeyError, TypeError, ValueError) as exc:
         logger.error("Missing or invalid price fields: %s", exc)
-        return None
-
-    if entry <= 0 or stop_loss <= 0 or take_profit <= 0:
-        logger.error("Prices must be positive")
         return None
 
     if action == "LONG":

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from config import (
@@ -15,6 +14,7 @@ from config import (
     RISK_STATE_PATH,
     WEEKLY_MAX_LOSS_FRACTION,
 )
+from security_utils import atomic_write_json, load_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +26,9 @@ class RiskState:
     day_start_balance: float
     week_start_balance: float
     month_start_balance: float
-    day_key: str  # YYYY-MM-DD
-    week_key: str  # YYYY-Www
-    month_key: str  # YYYY-MM
+    day_key: str
+    week_key: str
+    month_key: str
     wins: int = 0
     losses: int = 0
     no_trades: int = 0
@@ -51,31 +51,44 @@ class RiskManager:
         self._state = self._load_state()
 
     def _load_state(self) -> RiskState | None:
-        if not RISK_STATE_PATH.exists():
+        raw = load_json_file(RISK_STATE_PATH)
+        if not raw:
             return None
         try:
-            raw = json.loads(RISK_STATE_PATH.read_text(encoding="utf-8"))
-            return RiskState(**raw)
-        except (json.JSONDecodeError, TypeError) as exc:
+            state = RiskState(
+                day_start_balance=float(raw["day_start_balance"]),
+                week_start_balance=float(raw["week_start_balance"]),
+                month_start_balance=float(raw["month_start_balance"]),
+                day_key=str(raw["day_key"]),
+                week_key=str(raw["week_key"]),
+                month_key=str(raw["month_key"]),
+                wins=int(raw.get("wins", 0)),
+                losses=int(raw.get("losses", 0)),
+                no_trades=int(raw.get("no_trades", 0)),
+            )
+            return state
+        except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Could not load risk state: %s", exc)
             return None
 
     def _save_state(self) -> None:
-        RISK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        RISK_STATE_PATH.write_text(
-            json.dumps(self._state.__dict__, indent=2),
-            encoding="utf-8",
-        )
+        if self._state is None:
+            return
+        atomic_write_json(RISK_STATE_PATH, asdict(self._state))
 
     def _period_keys(self) -> tuple[str, str, str]:
         now = datetime.now(timezone.utc)
         day_key = now.strftime("%Y-%m-%d")
-        week_key = now.strftime("%Y-W%W")
+        iso = now.isocalendar()
+        week_key = f"{iso.year}-W{iso.week:02d}"
         month_key = now.strftime("%Y-%m")
         return day_key, week_key, month_key
 
     def sync_balance(self, balance: float) -> None:
         """Reset period baselines when day/week/month rolls over."""
+        if balance < 0:
+            balance = 0.0
+
         day_key, week_key, month_key = self._period_keys()
 
         if self._state is None:
@@ -109,6 +122,9 @@ class RiskManager:
 
     def can_trade(self, current_balance: float) -> tuple[bool, str]:
         """Return (allowed, reason)."""
+        if current_balance <= 0:
+            return False, "No available balance"
+
         if self._state is None:
             self.sync_balance(current_balance)
             return True, ""
@@ -134,17 +150,20 @@ class RiskManager:
 
     def calculate_position_size(
         self,
-        balance: float,
+        available_balance: float,
         entry: float,
         stop_loss: float,
         round_fn,
     ) -> PositionSizeResult | None:
         """
-        Risk 50% of available capital to stop loss distance.
-        size = risk_usd / |entry - stop_loss|
-        Cap by max margin at leverage.
+        Risk fraction of available capital to stop distance.
+        size = risk_usd / |entry - stop_loss|, capped by margin at leverage.
         """
-        risk_usd = balance * RISK_FRACTION
+        if available_balance <= 0:
+            logger.error("No available balance for sizing")
+            return None
+
+        risk_usd = available_balance * RISK_FRACTION
         stop_distance = abs(entry - stop_loss)
         if stop_distance < 1e-6:
             logger.error("Stop loss too close to entry")
@@ -154,9 +173,8 @@ class RiskManager:
         notional = size_eth * entry
         margin_required = notional / LEVERAGE
 
-        # Cannot use more margin than available balance
-        if margin_required > balance:
-            scale = balance / margin_required
+        if margin_required > available_balance:
+            scale = available_balance / margin_required
             size_eth *= scale
             notional = size_eth * entry
             margin_required = notional / LEVERAGE
@@ -192,7 +210,6 @@ class RiskManager:
 
     @property
     def win_rate(self) -> float:
-        """Win rate as 0-1 fraction."""
         if self._state is None:
             return 0.0
         total = self._state.wins + self._state.losses

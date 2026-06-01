@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 
 from config import COOLDOWN_MINUTES, COOLDOWN_STATE_PATH
+from security_utils import atomic_write_json, load_json_file
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class CooldownManager:
@@ -19,25 +25,25 @@ class CooldownManager:
         self._load()
 
     def _load(self) -> None:
-        if not COOLDOWN_STATE_PATH.exists():
+        raw = load_json_file(COOLDOWN_STATE_PATH)
+        if not raw:
+            return
+        until_str = raw.get("cooldown_until")
+        if not until_str:
             return
         try:
-            raw = json.loads(COOLDOWN_STATE_PATH.read_text(encoding="utf-8"))
-            until_str = raw.get("cooldown_until")
-            if until_str:
-                self._until = datetime.fromisoformat(until_str)
-        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            self._until = _ensure_utc(datetime.fromisoformat(str(until_str).replace("Z", "+00:00")))
+        except (ValueError, TypeError) as exc:
             logger.warning("Could not load cooldown state: %s", exc)
 
     def _save(self) -> None:
-        COOLDOWN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "cooldown_until": self._until.isoformat() if self._until else None,
         }
-        COOLDOWN_STATE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        atomic_write_json(COOLDOWN_STATE_PATH, payload)
 
     def start_cooldown(self) -> None:
-        """Start 30-minute cooldown from now."""
+        """Start cooldown from now."""
         self._until = datetime.now(timezone.utc) + timedelta(minutes=COOLDOWN_MINUTES)
         self._save()
         logger.info("Cooldown started until %s UTC", self._until.strftime("%Y-%m-%d %H:%M:%S"))
@@ -52,7 +58,7 @@ class CooldownManager:
         return True
 
     def remaining_seconds(self) -> int:
-        if not self.is_active() or self._until is None:
+        if self._until is None or not self.is_active():
             return 0
         delta = self._until - datetime.now(timezone.utc)
         return max(0, int(delta.total_seconds()))

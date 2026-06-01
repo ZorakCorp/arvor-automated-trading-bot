@@ -209,6 +209,7 @@ Journal → `data/trade_journal.csv` · Screenshots → `data/screenshots/`
 
 ```env
 LIVE_TRADING=true
+ARVOR_CONFIRM_LIVE_RISK=true
 HYPERLIQUID_PRIVATE_KEY=0x...
 HYPERLIQUID_WALLET_ADDRESS=0x...
 ```
@@ -292,6 +293,8 @@ Use a **public** TradingView chart URL when possible — login-gated charts ofte
 ---
 
 ## 🛡️ Safety Guardrails
+
+**Built-in hardening:** TradingView URL allowlist (SSRF protection) · private key ↔ wallet match · emergency close if SL/TP fails · atomic state files · log/journal redaction · CSV injection prevention · live position tracking + cooldown on close
 
 ```
 ┌─────────────────────────────────────────────────────────┐

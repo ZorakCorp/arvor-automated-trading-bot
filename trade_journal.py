@@ -5,10 +5,10 @@ from __future__ import annotations
 import csv
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from config import JOURNAL_PATH
+from security_utils import redact_for_log, sanitize_csv_cell
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +45,25 @@ class TradeJournal:
 
     def log_entry(self, row: dict[str, Any]) -> None:
         """Append one journal row."""
-        record = {h: row.get(h, "") for h in JOURNAL_HEADERS}
+        record = {h: sanitize_csv_cell(row.get(h, "")) for h in JOURNAL_HEADERS}
         if not record.get("timestamp_utc"):
             record["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
+
+        # Redact secrets from notes and AI response in storage
+        for key in ("notes", "ai_raw_response"):
+            if record.get(key):
+                record[key] = sanitize_csv_cell(redact_for_log(str(record[key])))
 
         try:
             with JOURNAL_PATH.open("a", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=JOURNAL_HEADERS)
                 writer.writerow(record)
-            logger.info("Journal entry saved: action=%s outcome=%s", record["action"], record["outcome"])
+                f.flush()
+            logger.info(
+                "Journal entry saved: action=%s outcome=%s",
+                record["action"],
+                record["outcome"],
+            )
         except OSError as exc:
             logger.error("Failed to write journal: %s", exc)
 

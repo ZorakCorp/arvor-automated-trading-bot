@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ai_analyzer import TradeSignal, analyze_chart
-from config import COIN, LEVERAGE, Settings
+from ai_analyzer import analyze_chart
+from config import LEVERAGE, Settings
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
 from risk_manager import RiskManager
 from screenshot import capture_chart_screenshot
+from security_utils import redact_for_log
 from trade_journal import TradeJournal
 
 logger = logging.getLogger(__name__)
@@ -37,18 +38,27 @@ class TradeExecutor:
         """Single bot iteration: monitor position or seek new trade."""
         mode = "live" if self.settings.live_trading else "paper"
 
-        # Paper: simulate SL/TP fills
+        # Detect closed positions (paper + live)
+        close_info = None
         if self.settings.is_paper:
             close_info = self.client.monitor_and_close_paper()
-            if close_info:
-                self._handle_position_closed(close_info, mode)
-                return
+        else:
+            close_info = self.client.monitor_live_position_close()
 
-        account = self.client.get_account()
+        if close_info:
+            self._handle_position_closed(close_info, mode)
+            return
+
+        try:
+            account = self.client.get_account()
+        except Exception as exc:
+            logger.error("Cannot read account — skipping cycle: %s", exc)
+            return
+
         self.risk.sync_balance(account.balance_usd)
 
-        if self.client.has_open_position():
-            logger.info("Position open — monitoring only")
+        if account.position is not None:
+            logger.info("Position open (%s) — monitoring only", account.position.side)
             return
 
         if self.cooldown.is_active():
@@ -60,7 +70,7 @@ class TradeExecutor:
             logger.warning("Trading blocked: %s", reason)
             return
 
-        self._attempt_new_trade(account.balance_usd, mode)
+        self._attempt_new_trade(account.available_usd, mode)
 
     def _handle_position_closed(self, close_info: dict[str, Any], mode: str) -> None:
         outcome = close_info.get("outcome", "unknown")
@@ -68,6 +78,7 @@ class TradeExecutor:
         balance = close_info.get("balance_after", 0.0)
 
         self.risk.record_outcome(outcome)
+        self.risk.sync_balance(float(balance))
         self.cooldown.start_cooldown()
         self.journal.log_entry(
             {
@@ -77,7 +88,7 @@ class TradeExecutor:
                 "balance_after": round(balance, 2),
                 "leverage": LEVERAGE,
                 "mode": mode,
-                "notes": f"Position closed ({outcome})",
+                "notes": f"Position closed ({outcome}) side={close_info.get('side', '')}",
             }
         )
         stats = self.risk.stats
@@ -90,7 +101,7 @@ class TradeExecutor:
             stats["losses"],
         )
 
-    def _attempt_new_trade(self, balance: float, mode: str) -> None:
+    def _attempt_new_trade(self, available_balance: float, mode: str) -> None:
         screenshot_path = capture_chart_screenshot(self.settings)
         if screenshot_path is None:
             logger.error("Screenshot failed — no trade")
@@ -125,7 +136,7 @@ class TradeExecutor:
             return
 
         size_result = self.risk.calculate_position_size(
-            balance,
+            available_balance,
             signal.entry,
             signal.stop_loss,
             self.client.round_size,
@@ -154,7 +165,8 @@ class TradeExecutor:
                 use_limit=False,
             )
         except Exception as exc:
-            logger.error("Order failed — stopping cycle: %s", exc)
+            safe = redact_for_log(str(exc))
+            logger.error("Order failed — stopping cycle: %s", safe)
             self.journal.log_entry(
                 {
                     "action": signal.action,
@@ -167,12 +179,12 @@ class TradeExecutor:
                     "screenshot_path": str(screenshot_path),
                     "ai_raw_response": signal.raw_response,
                     "mode": mode,
-                    "notes": str(exc),
+                    "notes": safe,
                 }
             )
             return
 
-        account_after = self.client.get_account()
+        account = self.client.get_account()
         self.journal.log_entry(
             {
                 "action": signal.action,
@@ -182,11 +194,11 @@ class TradeExecutor:
                 "position_size": size_result.size_eth,
                 "leverage": LEVERAGE,
                 "outcome": "open",
-                "balance_after": round(account_after.balance_usd, 2),
+                "balance_after": round(account.balance_usd, 2),
                 "screenshot_path": str(screenshot_path),
                 "ai_raw_response": signal.raw_response,
                 "mode": mode,
-                "notes": str(result),
+                "notes": "paper_open" if self.settings.is_paper else "orders_accepted",
             }
         )
         logger.info("Position opened successfully")

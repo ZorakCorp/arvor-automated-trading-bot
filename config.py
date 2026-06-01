@@ -8,6 +8,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from security_utils import (
+    validate_eth_wallet_address,
+    validate_private_key_format,
+    validate_tradingview_url,
+)
+
 load_dotenv()
 
 # Project paths
@@ -18,17 +24,22 @@ JOURNAL_PATH = DATA_DIR / "trade_journal.csv"
 PAPER_STATE_PATH = DATA_DIR / "paper_state.json"
 RISK_STATE_PATH = DATA_DIR / "risk_state.json"
 COOLDOWN_STATE_PATH = DATA_DIR / "cooldown_state.json"
+LIVE_POSITION_PATH = DATA_DIR / "live_position.json"
 
 # Trading constants
 COIN = "ETH"
 TIMEFRAME_MINUTES = 5
 LEVERAGE = 5
-RISK_FRACTION = 0.50  # 50% of available capital at risk per trade
+RISK_FRACTION = 0.50
 DAILY_MAX_LOSS_FRACTION = 0.10
 WEEKLY_MAX_LOSS_FRACTION = 0.70
 MONTHLY_MAX_LOSS_FRACTION = 0.70
 COOLDOWN_MINUTES = 30
-LOOP_INTERVAL_SECONDS = 60  # check every minute; trade logic respects 5m + cooldown
+LOOP_INTERVAL_SECONDS = 60
+
+# Hyperliquid ETH size precision (sz decimals)
+ETH_SIZE_DECIMALS = 4
+MIN_ETH_ORDER_SIZE = 0.001
 
 
 @dataclass(frozen=True)
@@ -56,6 +67,26 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def _env_int(name: str, default: int, min_val: int, max_val: int) -> int:
+    try:
+        val = int(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not min_val <= val <= max_val:
+        raise ValueError(f"{name} must be between {min_val} and {max_val}")
+    return val
+
+
+def _env_float(name: str, default: float, min_val: float, max_val: float) -> float:
+    try:
+        val = float(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if not min_val <= val <= max_val:
+        raise ValueError(f"{name} must be between {min_val} and {max_val}")
+    return val
+
+
 def load_settings() -> Settings:
     """Load and validate settings. Raises ValueError if required vars missing."""
     live = _env_bool("LIVE_TRADING", default=False)
@@ -64,19 +95,27 @@ def load_settings() -> Settings:
     private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "").strip()
     wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-    chart_url = os.getenv("TRADINGVIEW_CHART_URL", "").strip()
+    chart_url_raw = os.getenv("TRADINGVIEW_CHART_URL", "").strip()
 
-    # Paper mode only needs OpenAI + chart URL for full loop testing
     if live:
+        if not _env_bool("ARVOR_CONFIRM_LIVE_RISK", default=False):
+            raise ValueError(
+                "LIVE_TRADING=true requires ARVOR_CONFIRM_LIVE_RISK=true "
+                "(explicit acknowledgment of real-fund risk)"
+            )
         if not private_key:
             raise ValueError("HYPERLIQUID_PRIVATE_KEY is required when LIVE_TRADING=true")
         if not wallet:
             raise ValueError("HYPERLIQUID_WALLET_ADDRESS is required when LIVE_TRADING=true")
+        private_key = validate_private_key_format(private_key)
+        wallet = validate_eth_wallet_address(wallet)
 
-    if not openai_key:
-        raise ValueError("OPENAI_API_KEY is required")
-    if not chart_url:
+    if not openai_key or len(openai_key) < 20:
+        raise ValueError("OPENAI_API_KEY is required and appears invalid")
+    if not chart_url_raw:
         raise ValueError("TRADINGVIEW_CHART_URL is required")
+
+    chart_url = validate_tradingview_url(chart_url_raw)
 
     return Settings(
         hyperliquid_private_key=private_key,
@@ -85,10 +124,10 @@ def load_settings() -> Settings:
         tradingview_chart_url=chart_url,
         live_trading=live,
         hyperliquid_testnet=testnet,
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-        paper_starting_balance=float(os.getenv("PAPER_STARTING_BALANCE", "10000")),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o").strip() or "gpt-4o",
+        paper_starting_balance=_env_float("PAPER_STARTING_BALANCE", 10000.0, 1.0, 1_000_000_000.0),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
-        screenshot_wait_ms=int(os.getenv("SCREENSHOT_WAIT_MS", "18000")),
+        screenshot_wait_ms=_env_int("SCREENSHOT_WAIT_MS", 18000, 8000, 120_000),
     )
 
 
