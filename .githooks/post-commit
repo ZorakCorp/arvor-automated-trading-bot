@@ -1,0 +1,6 @@
+#!/bin/sh
+# Optional: enable with `git config core.hooksPath .githooks`
+# Pushes main to all origin push URLs (shep95 + ZorakCorp) after each commit.
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+[ "$branch" = "main" ] || exit 0
+git push origin main 2>/dev/null || true

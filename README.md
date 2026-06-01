@@ -154,9 +154,21 @@ The bot is tuned for your Pine script **Nested Fractal - Clean**. The AI only tr
 
 ### 1 · Clone
 
+Mirrors (kept in sync):
+
+- [shep95/arvor-automated-trading-bot](https://github.com/shep95/arvor-automated-trading-bot)
+- [ZorakCorp/arvor-automated-trading-bot](https://github.com/ZorakCorp/arvor-automated-trading-bot)
+
 ```bash
 git clone https://github.com/shep95/arvor-automated-trading-bot.git
 cd arvor-automated-trading-bot
+```
+
+**Push to both repos** (configured on `origin`):
+
+```bash
+git push origin main
+# or: .\scripts\push-all.ps1
 ```
 
 ### 2 · Install
