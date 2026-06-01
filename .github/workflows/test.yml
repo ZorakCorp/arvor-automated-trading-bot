@@ -22,8 +22,6 @@ jobs:
       - name: Unit tests
         run: python -m unittest tests.test_bot -v
         env:
-          OPENAI_API_KEY: sk-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          TRADINGVIEW_CHART_URL: https://www.tradingview.com/chart/ci-test/
           LIVE_TRADING: "false"
 
       - name: Smoke test

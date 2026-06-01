@@ -1,7 +1,8 @@
 """
-Hyperliquid ETH trading bot — Nested Fractal (TradingView) + AI vision.
+Hyperliquid ETH trading bot — fractal signals from free Hyperliquid candles.
 
-Default: paper trading. Set LIVE_TRADING=true only when ready for real funds.
+Default: paper trading + SIGNAL_MODE=candles (no TradingView, no OpenAI).
+Set LIVE_TRADING=true only when ready for real funds.
 """
 
 from __future__ import annotations
@@ -17,8 +18,10 @@ from hyperliquid_client import HyperliquidClient
 from risk_manager import RiskManager
 from trade_executor import TradeExecutor
 from trade_journal import TradeJournal
+from webhook_server import start_webhook_server
 
 _running = True
+_webhook_server = None
 
 
 def _configure_logging(level: str) -> None:
@@ -31,13 +34,15 @@ def _configure_logging(level: str) -> None:
 
 
 def _handle_shutdown(signum: int, frame) -> None:  # noqa: ARG001
-    global _running
+    global _running, _webhook_server
     logging.getLogger(__name__).info("Shutdown signal received (%s)", signum)
     _running = False
+    if _webhook_server is not None:
+        _webhook_server.shutdown()
 
 
 def main() -> None:
-    global _running
+    global _running, _webhook_server
 
     try:
         settings = load_settings()
@@ -53,12 +58,25 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_shutdown)
 
     mode_label = "LIVE" if settings.live_trading else "PAPER"
+    signal_label = settings.signal_mode.upper()
     log.info("=" * 60)
-    log.info("Hyperliquid ETH Bot starting — mode: %s", mode_label)
+    log.info("Hyperliquid ETH Bot starting — mode: %s | signals: %s", mode_label, signal_label)
     if settings.live_trading:
         log.warning("LIVE TRADING ENABLED — real funds at risk")
     else:
         log.info("Paper trading (set LIVE_TRADING=true for live)")
+    if settings.uses_webhook:
+        log.info(
+            "Webhook mode: TradingView alerts → port %s (/webhook?secret=...)",
+            settings.webhook_port,
+        )
+    elif settings.uses_candles:
+        log.info(
+            "Candles mode (free): Hyperliquid ETH 5m fractals every %ss",
+            LOOP_INTERVAL_SECONDS,
+        )
+    else:
+        log.info("Screenshot mode: TradingView + OpenAI vision")
     log.info("=" * 60)
 
     client = HyperliquidClient(settings)
@@ -67,7 +85,13 @@ def main() -> None:
     journal = TradeJournal()
     executor = TradeExecutor(settings, client, risk, cooldown, journal)
 
-    # Initial balance sync
+    if settings.uses_webhook:
+        _webhook_server, _ = start_webhook_server(
+            settings.webhook_port,
+            settings.tradingview_webhook_secret,
+            executor.process_webhook_signal,
+        )
+
     try:
         account = client.get_account()
         risk.sync_balance(account.balance_usd)

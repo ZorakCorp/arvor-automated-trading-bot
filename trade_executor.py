@@ -3,22 +3,31 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
-from ai_analyzer import analyze_chart, log_signal_decision
-from config import LEVERAGE, Settings
+from ai_analyzer import TradeSignal, analyze_chart, log_signal_decision
+from config import FRACTAL_SIGNAL_STATE_PATH, LEVERAGE, Settings
 from cooldown import CooldownManager
+from fractal_signals import (
+    evaluate_fractal_signal,
+    parse_hyperliquid_candles,
+    signal_candle_time,
+)
 from hyperliquid_client import HyperliquidClient
 from risk_manager import RiskManager
-from screenshot import capture_chart_screenshot
-from security_utils import redact_for_log
+from screenshot import (
+    capture_chart_screenshot,
+    is_ai_blocked_page_reasoning,
+)
+from security_utils import atomic_write_json, load_json_file, redact_for_log
 from trade_journal import TradeJournal
 
 logger = logging.getLogger(__name__)
 
 
 class TradeExecutor:
-    """Orchestrates screenshot → AI → risk → order flow."""
+    """Orchestrates signal intake (candles / webhook / screenshot) → risk → order flow."""
 
     def __init__(
         self,
@@ -33,12 +42,12 @@ class TradeExecutor:
         self.risk = risk
         self.cooldown = cooldown
         self.journal = journal
+        self._signal_lock = threading.Lock()
 
     def run_cycle(self) -> None:
-        """Single bot iteration: monitor position or seek new trade."""
+        """Single bot iteration: monitor position; scan for new trades when applicable."""
         mode = "live" if self.settings.live_trading else "paper"
 
-        # Detect closed positions (paper + live)
         close_info = None
         if self.settings.is_paper:
             close_info = self.client.monitor_and_close_paper()
@@ -69,6 +78,10 @@ class TradeExecutor:
             logger.info("Position open (%s) — monitoring only", account.position.side)
             return
 
+        if self.settings.uses_webhook:
+            logger.debug("Webhook mode — waiting for TradingView alerts")
+            return
+
         if self.cooldown.is_active():
             logger.info(self.cooldown.reason())
             return
@@ -78,7 +91,109 @@ class TradeExecutor:
             logger.warning("Trading blocked: %s", reason)
             return
 
-        self._attempt_new_trade(account.available_usd, mode)
+        if self.settings.uses_candles:
+            self._attempt_new_trade_from_candles(account.available_usd, mode)
+        else:
+            self._attempt_new_trade_from_screenshot(account.available_usd, mode)
+
+    def process_webhook_signal(self, signal: TradeSignal) -> dict[str, str]:
+        """Handle TradingView alert webhook (optional paid mode)."""
+        with self._signal_lock:
+            mode = "live" if self.settings.live_trading else "paper"
+
+            close_info = None
+            if self.settings.is_paper:
+                close_info = self.client.monitor_and_close_paper()
+            else:
+                close_info = self.client.monitor_live_position_close()
+            if close_info:
+                self._handle_position_closed(close_info, mode)
+
+            try:
+                account = self.client.get_account()
+            except Exception as exc:
+                logger.error("Webhook: cannot read account: %s", exc)
+                return {"status": "error", "reason": "account_unavailable"}
+
+            self.risk.sync_balance(account.balance_usd)
+
+            if account.position is not None:
+                return {"status": "rejected", "reason": "position_already_open"}
+
+            if self.cooldown.is_active():
+                return {"status": "rejected", "reason": "cooldown_active"}
+
+            allowed, reason = self.risk.can_trade(account.balance_usd)
+            if not allowed:
+                return {"status": "rejected", "reason": reason}
+
+            ok, msg = self._execute_signal(
+                signal,
+                source_label="tradingview_webhook",
+                screenshot_path="",
+                available_balance=account.available_usd,
+                mode=mode,
+            )
+            if ok and signal.action in ("LONG", "SHORT"):
+                return {"status": "accepted", "action": signal.action}
+            return {"status": "rejected", "reason": msg}
+
+    def _load_fractal_state(self) -> int | None:
+        data = load_json_file(FRACTAL_SIGNAL_STATE_PATH, default={})
+        t = data.get("last_signal_candle_t")
+        return int(t) if t is not None else None
+
+    def _save_fractal_state(self, candle_t: int) -> None:
+        atomic_write_json(
+            FRACTAL_SIGNAL_STATE_PATH,
+            {"last_signal_candle_t": candle_t},
+        )
+
+    def _attempt_new_trade_from_candles(self, available_balance: float, mode: str) -> None:
+        """Free mode: fractal breakout on Hyperliquid 5m ETH candles."""
+        try:
+            raw_5m = self.client.get_candles("5m", self.settings.fractal_candle_limit)
+            candles_5m = parse_hyperliquid_candles(raw_5m)
+        except Exception as exc:
+            logger.error("Failed to fetch 5m candles: %s", exc)
+            return
+
+        candles_htf = None
+        htf = self.settings.fractal_htf_interval
+        if htf != "none":
+            try:
+                raw_htf = self.client.get_candles(htf, max(80, self.settings.fractal_candle_limit // 3))
+                candles_htf = parse_hyperliquid_candles(raw_htf)
+            except Exception as exc:
+                logger.warning("HTF candle fetch failed (%s): %s", htf, exc)
+
+        last_t = self._load_fractal_state()
+        signal = evaluate_fractal_signal(
+            candles_5m,
+            candles_htf,
+            risk_reward=self.settings.fractal_risk_reward,
+            require_nested=self.settings.fractal_require_nested,
+            last_signal_candle_t=last_t,
+        )
+        if signal is None:
+            return
+
+        candle_t = signal_candle_time(signal)
+        if candle_t is not None:
+            self._save_fractal_state(candle_t)
+
+        if signal.action == "NO_TRADE":
+            logger.debug("Fractal scan: %s", signal.reasoning)
+            return
+
+        log_signal_decision(signal)
+        self._execute_signal(
+            signal,
+            source_label="hyperliquid_fractal",
+            screenshot_path="",
+            available_balance=available_balance,
+            mode=mode,
+        )
 
     def _handle_position_closed(self, close_info: dict[str, Any], mode: str) -> None:
         outcome = close_info.get("outcome", "unknown")
@@ -109,7 +224,7 @@ class TradeExecutor:
             stats["losses"],
         )
 
-    def _attempt_new_trade(self, available_balance: float, mode: str) -> None:
+    def _attempt_new_trade_from_screenshot(self, available_balance: float, mode: str) -> None:
         screenshot_path = capture_chart_screenshot(self.settings)
         if screenshot_path is None:
             logger.error("Screenshot failed — no trade")
@@ -128,6 +243,21 @@ class TradeExecutor:
             self.risk.record_outcome("no_trade")
             return
 
+        if is_ai_blocked_page_reasoning(signal.reasoning):
+            logger.error(
+                "Screenshot blocked — use SIGNAL_MODE=candles (free) instead"
+            )
+            self.journal.log_no_trade(
+                "NO_TRADE",
+                str(screenshot_path),
+                signal.raw_response,
+                mode,
+                reasoning=signal.reasoning,
+                notes="TradingView 403/blocked",
+            )
+            self.risk.record_outcome("no_trade")
+            return
+
         log_signal_decision(signal)
 
         if signal.action == "NO_TRADE":
@@ -141,9 +271,38 @@ class TradeExecutor:
             self.risk.record_outcome("no_trade")
             return
 
+        self._execute_signal(
+            signal,
+            source_label="openai_vision",
+            screenshot_path=str(screenshot_path),
+            available_balance=available_balance,
+            mode=mode,
+        )
+
+    def _execute_signal(
+        self,
+        signal: TradeSignal,
+        source_label: str,
+        screenshot_path: str,
+        available_balance: float,
+        mode: str,
+    ) -> tuple[bool, str]:
+        """Shared execution path. Returns (success, message)."""
+        if signal.action == "NO_TRADE":
+            self.journal.log_no_trade(
+                "NO_TRADE",
+                screenshot_path,
+                signal.raw_response,
+                mode,
+                reasoning=signal.reasoning,
+                notes=f"source={source_label}",
+            )
+            self.risk.record_outcome("no_trade")
+            return True, "no_trade"
+
         if signal.entry is None or signal.stop_loss is None or signal.take_profit is None:
             logger.error("Missing SL/TP — no trade")
-            return
+            return False, "missing_prices"
 
         size_result = self.risk.calculate_position_size(
             available_balance,
@@ -153,21 +312,22 @@ class TradeExecutor:
         )
         if size_result is None:
             logger.error("Position size calculation failed — no trade")
-            return
+            return False, "position_size_failed"
 
         logger.info(
-            "Executing %s | size=%.4f ETH | entry=%.2f sl=%.2f tp=%.2f",
+            "Executing %s | size=%.4f ETH | entry=%.2f sl=%.2f tp=%.2f | source=%s",
             signal.action,
             size_result.size_eth,
             signal.entry,
             signal.stop_loss,
             signal.take_profit,
+            source_label,
         )
         logger.info("Trade rationale: %s", signal.reasoning)
 
         try:
             self.client.set_leverage()
-            result = self.client.open_position(
+            self.client.open_position(
                 side=signal.action,
                 size=size_result.size_eth,
                 entry_price=signal.entry,
@@ -177,7 +337,7 @@ class TradeExecutor:
             )
         except Exception as exc:
             safe = redact_for_log(str(exc))
-            logger.error("Order failed — stopping cycle: %s", safe)
+            logger.error("Order failed: %s", safe)
             self.journal.log_entry(
                 {
                     "action": signal.action,
@@ -187,14 +347,14 @@ class TradeExecutor:
                     "position_size": size_result.size_eth,
                     "leverage": LEVERAGE,
                     "outcome": "error",
-                    "screenshot_path": str(screenshot_path),
+                    "screenshot_path": screenshot_path,
                     "ai_reasoning": signal.reasoning,
                     "ai_raw_response": signal.raw_response,
                     "mode": mode,
-                    "notes": safe,
+                    "notes": f"{source_label}: {safe}",
                 }
             )
-            return
+            return False, "order_failed"
 
         account = self.client.get_account()
         self.journal.log_entry(
@@ -207,11 +367,12 @@ class TradeExecutor:
                 "leverage": LEVERAGE,
                 "outcome": "open",
                 "balance_after": round(account.balance_usd, 2),
-                "screenshot_path": str(screenshot_path),
+                "screenshot_path": screenshot_path,
                 "ai_reasoning": signal.reasoning,
                 "ai_raw_response": signal.raw_response,
                 "mode": mode,
-                "notes": "paper_open" if self.settings.is_paper else "orders_accepted",
+                "notes": "paper_open" if self.settings.is_paper else f"orders_accepted ({source_label})",
             }
         )
         logger.info("Position opened successfully")
+        return True, "opened"

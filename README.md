@@ -4,7 +4,7 @@
 
 ### Hyperliquid ETH Bot · Nested Fractal · AI Vision
 
-**Screenshots your TradingView chart → AI reads your signal → trades ETH on Hyperliquid**
+**Fully automated ETH bot using free Hyperliquid candle data — no TradingView Pro, no OpenAI**
 
 <br/>
 
@@ -30,22 +30,100 @@
 
 Gather these **before** opening Railway:
 
-| # | What | Where to get it |
-|---|------|-----------------|
-| 1 | **OpenAI API key** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| 2 | **TradingView chart URL** | Your saved ETH 5m chart with Nested Fractal (see Part 1 below) |
-| 3 | **Hyperliquid account + USDC** | [app.hyperliquid.xyz](https://app.hyperliquid.xyz) (live trading only) |
-| 4 | **Wallet private key** | MetaMask → account with your Hyperliquid funds (live only) |
-| 5 | **GitHub account** | To connect Railway to this repo |
-| 6 | **Railway account** | [railway.app](https://railway.app) |
+| # | What | Cost |
+|---|------|------|
+| 1 | **Nothing extra for signals** | `SIGNAL_MODE=candles` uses Hyperliquid’s free public API |
+| 2 | **Railway hosting** | Free trial / ~$5/mo hobby (only ongoing cost) |
+| 3 | **Hyperliquid account** | Free to use; you only pay trading fees when live |
 
-> **Paper mode first?** You only need items **1** and **2**. No Hyperliquid keys required.
+> **Paper mode:** set `LIVE_TRADING=false` — no wallet keys needed. Bot runs with fake balance.
+
+> **Optional paid modes:** `SIGNAL_MODE=webhook` needs TradingView Pro. `SIGNAL_MODE=screenshot` needs OpenAI API credits.
 
 ---
 
 ## 🚀 Setup checklist (zero to running)
 
-### Part 1 — TradingView chart (15 min)
+### Part 1 — Free automated signals (default, 2 min)
+
+**Goal:** Bot scans **Hyperliquid ETH 5m candles** every 60 seconds for fractal breakouts. Zero TradingView, zero OpenAI.
+
+**Railway variables (paper mode — minimum):**
+
+```env
+SIGNAL_MODE=candles
+LIVE_TRADING=false
+```
+
+That’s it. Deploy and the bot runs 24/7.
+
+**How signals work:**
+- Detects **Williams fractal** breakouts on 5m ETH (similar concept to nested fractal, computed locally)
+- **Stop loss** = opposite fractal level
+- **Take profit** = configurable R multiple (default **2R** via `FRACTAL_RISK_REWARD=2.0`)
+- Optional higher-timeframe filter: `FRACTAL_REQUIRE_NESTED=true` + `FRACTAL_HTF_INTERVAL=15m`
+
+> This is **not** a pixel-perfect clone of your TradingView “Nested Fractal - Clean” Pine script — it’s a free, automated fractal strategy on the same 5m ETH market. For exact TV indicator parity, use paid webhook mode or screenshot+AI mode.
+
+---
+
+### Part 1b — TradingView webhooks (optional, requires Pro)
+
+1. Deploy on Railway (Part 4 below).
+2. Service → **Settings** → **Networking** → **Generate Domain** (e.g. `arvor-production.up.railway.app`).
+3. In Railway **Variables**, set:
+   - `SIGNAL_MODE=webhook`
+   - `TRADINGVIEW_WEBHOOK_SECRET=` a long random string (e.g. 32+ chars from a password manager)
+4. Redeploy. Logs should show: `Webhook mode: TradingView alerts → port ...`
+
+Your webhook URL (save this):
+
+```text
+https://YOUR-RAILWAY-DOMAIN.up.railway.app/webhook?secret=YOUR_TRADINGVIEW_WEBHOOK_SECRET
+```
+
+Health check: `https://YOUR-RAILWAY-DOMAIN.up.railway.app/health`
+
+#### 1b — Create alert on your ETH 5m chart
+
+1. Open your chart with **Nested Fractal - Clean** on **ETH 5m**.
+2. Click **Alert** (clock icon) → **Create alert**.
+3. **Condition:** choose your indicator’s signal (e.g. **Nested Fractal - Clean** → “Any alert() function call”, or the indicator’s Long/Short condition if listed).
+4. **Notifications** tab → enable **Webhook URL** → paste the URL from step 1a.
+5. **Message** — paste **one** of these templates and adjust plot names to match your indicator:
+
+**JSON (recommended):**
+
+```json
+{
+  "action": "LONG",
+  "entry": {{close}},
+  "stop_loss": {{plot_1}},
+  "take_profit": {{plot_0}},
+  "reasoning": "Nested Fractal alert"
+}
+```
+
+For SHORT alerts, duplicate the alert with `"action": "SHORT"` (or use your indicator’s alert message if it already outputs JSON).
+
+**Simple pipe format** (if JSON placeholders fail):
+
+```text
+LONG|{{close}}|{{plot_1}}|{{plot_0}}
+```
+
+Replace `plot_0` / `plot_1` with the correct SL/TP plot indices from your Pine script (check indicator source or trial-and-error in the alert preview).
+
+6. **Expiration:** open-ended. **Alert name:** e.g. `Arvor LONG ETH 5m`.
+7. Create a **second alert** for SHORT if your indicator uses separate conditions.
+
+TradingView sends the message **only when the signal fires** — the bot opens the trade, sets SL/TP, and monitors the position. No polling, no screenshots.
+
+---
+
+### Part 1 (legacy) — Screenshot mode
+
+**Only if you cannot use TradingView webhooks.** Set `SIGNAL_MODE=screenshot` and provide OpenAI + chart URL.
 
 **Goal:** A link the bot can screenshot every minute.
 
@@ -58,11 +136,13 @@ Gather these **before** opening Railway:
    - Orange **SL:** line
    - **LONG** or **SHORT** panel
 6. Click **Save** (top toolbar) → save the layout.
-7. Copy the **full URL** from your browser bar.  
+7. **Share → Make public** (or copy a link that works when logged out).
+8. Copy the **full URL** from your browser bar.  
    Example: `https://www.tradingview.com/chart/AbCdEf123/MyLayout/`
-8. Keep this URL — you'll paste it as `TRADINGVIEW_CHART_URL`.
+9. **Verify in incognito:** paste the URL in a private window — you must see ETH 5m + Nested Fractal **without** logging in. If you get **403** or a login wall, Railway will too.
+10. Keep this URL — you'll paste it as `TRADINGVIEW_CHART_URL`.
 
-> **Tip:** Use a layout that loads without login if possible. Railway runs headless — login-only charts may fail.
+> **Railway runs headless** from a datacenter IP. Private/login-only charts often return **403**. Use a public saved chart, or upload a Playwright session file (see `TRADINGVIEW_STORAGE_STATE_PATH` below).
 
 ---
 
@@ -163,54 +243,22 @@ Open Railway → your service → **Variables** → **Raw Editor**.
 
 ---
 
-### Option A — Paper mode (fake money, safe testing)
-
-Copy this, replace the two `YOUR_...` values, save:
+### Option A — Paper mode (free)
 
 ```env
-# === REQUIRED ===
-OPENAI_API_KEY=YOUR_OPENAI_KEY_sk-proj-...
-TRADINGVIEW_CHART_URL=https://www.tradingview.com/chart/YOUR_CHART_ID/
-
-# === MODE ===
+SIGNAL_MODE=candles
 LIVE_TRADING=false
-
-# === OPTIONAL (defaults are fine) ===
-OPENAI_MODEL=gpt-4o
-SCREENSHOT_WAIT_MS=22000
-PAPER_STARTING_BALANCE=10000
 LOG_LEVEL=INFO
 ```
 
-**Do NOT add** `HYPERLIQUID_PRIVATE_KEY` or `HYPERLIQUID_WALLET_ADDRESS` in paper mode.
-
----
-
-### Option B — Live trading (real money)
-
-Copy this, replace **every** `YOUR_...` value, save:
+### Option B — Live trading
 
 ```env
-# === LIVE TRADING (real funds) ===
+SIGNAL_MODE=candles
 LIVE_TRADING=true
 ARVOR_CONFIRM_LIVE_RISK=true
-
-# === REQUIRED ===
-OPENAI_API_KEY=YOUR_OPENAI_KEY_sk-proj-...
-TRADINGVIEW_CHART_URL=https://www.tradingview.com/chart/YOUR_CHART_ID/
-
-# === HYPERLIQUID (same wallet — see Part 3) ===
-HYPERLIQUID_WALLET_ADDRESS=0xYOUR_WALLET_ADDRESS_40_CHARS
-HYPERLIQUID_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_64_HEX_CHARS
-
-# === HYPERLIQUID OPTIONS ===
-HYPERLIQUID_TESTNET=false
-AUTO_SPOT_TO_PERP=true
-
-# === OPTIONAL ===
-OPENAI_MODEL=gpt-4o
-SCREENSHOT_WAIT_MS=22000
-LOG_LEVEL=INFO
+HYPERLIQUID_WALLET_ADDRESS=0xYOUR_WALLET
+HYPERLIQUID_PRIVATE_KEY=0xYOUR_KEY
 ```
 
 ---
@@ -219,16 +267,21 @@ LOG_LEVEL=INFO
 
 | Variable | Paper | Live | What to put |
 |----------|:-----:|:----:|-------------|
-| `OPENAI_API_KEY` | ✅ | ✅ | Your OpenAI key (`sk-...`, 20+ chars) |
-| `TRADINGVIEW_CHART_URL` | ✅ | ✅ | Full `https://www.tradingview.com/chart/...` link |
+| `SIGNAL_MODE` | ✅ | ✅ | `candles` (free default), `webhook`, or `screenshot` |
+| `FRACTAL_RISK_REWARD` | — | — | TP distance as multiple of risk (default `2.0`) |
+| `FRACTAL_REQUIRE_NESTED` | — | — | `true` = require 15m/1h trend alignment |
+| `FRACTAL_HTF_INTERVAL` | — | — | `15m`, `1h`, or `none` (default `15m`) |
+| `TRADINGVIEW_WEBHOOK_SECRET` | — | — | Only for `SIGNAL_MODE=webhook` (TV Pro) |
+| `OPENAI_API_KEY` | — | — | Only for `SIGNAL_MODE=screenshot` |
 | `LIVE_TRADING` | ✅ | ✅ | `false` = paper · `true` = real money |
-| `ARVOR_CONFIRM_LIVE_RISK` | — | ✅ | Must be `true` when live (safety gate) |
+| `ARVOR_CONFIRM_LIVE_RISK` | — | ✅ | Must be `true` when live |
 | `HYPERLIQUID_WALLET_ADDRESS` | — | ✅ | Your `0x...` address **with USDC on Hyperliquid** |
 | `HYPERLIQUID_PRIVATE_KEY` | — | ✅ | Private key for **that same** `0x...` address |
 | `HYPERLIQUID_TESTNET` | — | — | `false` for mainnet (default) |
 | `AUTO_SPOT_TO_PERP` | — | — | `true` = auto-move Spot→Perps (ignored on unified accounts) |
 | `OPENAI_MODEL` | — | — | `gpt-4o` (default) or `gpt-4o-mini` (cheaper) |
 | `SCREENSHOT_WAIT_MS` | — | — | `22000` if chart loads slowly (default `18000`) |
+| `TRADINGVIEW_STORAGE_STATE_PATH` | — | — | Path to Playwright `tv_auth.json` if chart requires login |
 | `PAPER_STARTING_BALANCE` | — | — | Fake balance in paper mode (default `10000`) |
 | `LOG_LEVEL` | — | — | `INFO` (default) or `DEBUG` for more detail |
 
@@ -247,17 +300,44 @@ Use **lowercase only**:
 
 ## ✅ How to know it's working
 
-### Paper mode — good logs
+### Candles mode (free) — good logs
 
 ```text
-Hyperliquid ETH Bot starting — mode: PAPER
-Paper trading mode enabled (balance=10000.00)
-Screenshot saved: /app/data/screenshots/eth_5m_....png
-AI signal: NO_TRADE
-Journal entry saved: action=NO_TRADE
+Hyperliquid ETH Bot starting — mode: PAPER | signals: CANDLES
+Candles mode (free): Hyperliquid ETH 5m fractals every 60s
+Perps balance: $10000.00 (available $10000.00)
 ```
 
-`NO_TRADE` most of the time is **normal** — waiting for Nested Fractal signal.
+When a fractal breakout fires:
+
+```text
+AI decision: LONG
+Executing LONG | size=0.0012 ETH | entry=3500.00 sl=3475.00 tp=3550.00 | source=hyperliquid_fractal
+Position opened successfully
+```
+
+Between signals you’ll see debug lines like `Fractal scan: No new 5m fractal breakout` — that’s normal.
+
+---
+
+### Webhook mode — good logs
+
+```text
+Hyperliquid ETH Bot starting — mode: PAPER | signals: WEBHOOK
+Webhook mode: TradingView alerts → port 8080 (path /webhook?secret=...)
+TradingView webhook listening on 0.0.0.0:8080 (/webhook)
+Perps balance: $10000.00 (available $10000.00)
+```
+
+When your TradingView alert fires:
+
+```text
+TradingView webhook received: LONG (source={"action":"LONG",...})
+Executing LONG | size=0.0012 ETH | entry=3500.00 sl=3475.00 tp=3550.00
+Position opened successfully
+```
+
+Between alerts the bot only **monitors** open positions — no screenshots, no OpenAI calls.
 
 ---
 
@@ -286,17 +366,17 @@ Position opened successfully
 
 ```mermaid
 flowchart LR
-    A[TradingView 5m] -->|Screenshot| B[OpenAI Vision]
-    B -->|LONG/SHORT/NO_TRADE| C{Risk check}
+    A[Hyperliquid 5m candles] -->|Fractal scan| B[Arvor on Railway]
+    B --> C{Risk check}
     C -->|Pass| D[Hyperliquid Order]
-    C -->|NO_TRADE| E[Wait 60s]
-    D --> F[Journal + Cooldown]
+    C -->|No signal| E[Wait 60s]
+    D --> F[Monitor SL/TP + Journal]
 ```
 
 | Step | What happens |
 |------|----------------|
-| 1 | Bot screenshots your TradingView chart |
-| 2 | GPT-4o reads gold TP, orange SL, LONG/SHORT panel |
+| 1 | Bot pulls free ETH 5m OHLC from Hyperliquid every 60s |
+| 2 | Detects fractal breakout + sets SL/TP |
 | 3 | If valid signal → sizes position (50% risk, 5× leverage) |
 | 4 | Places ETH entry + stop loss + take profit on Hyperliquid |
 | 5 | Logs everything to `data/trade_journal.csv` |
@@ -345,7 +425,9 @@ Recommended indicator settings: Lookback `30` · Fidelity `70` · Confidence `65
 | `Action disabled when unified account is active` | Normal on unified accounts — update to latest code |
 | `Trading blocked: No available balance` | Deposit USDC on Hyperliquid for your wallet address |
 | `NO_TRADE` every cycle | **Normal** — no fractal signal on chart yet |
-| Screenshot fails | Increase `SCREENSHOT_WAIT_MS=30000` or use public chart URL |
+| AI says **403 error page** / no chart | Chart URL blocked on Railway — open URL in **incognito**; enable **public share**; or set `TRADINGVIEW_STORAGE_STATE_PATH=/app/data/tv_auth.json` (see below) |
+| Screenshot fails | Increase `SCREENSHOT_WAIT_MS=30000`; confirm chart loads without login |
+| `TradingView page blocked before screenshot` | Same as 403 — fix public URL or session file |
 | `LIVE_TRADING requires ARVOR_CONFIRM_LIVE_RISK` | Add `ARVOR_CONFIRM_LIVE_RISK=true` |
 
 ---
@@ -357,8 +439,11 @@ arvor-automated-trading-bot/
 ├── main.py                 # Bot entry point
 ├── config.py               # Settings from env vars
 ├── hyperliquid_client.py   # Hyperliquid + unified account support
-├── screenshot.py           # TradingView screenshots (Playwright)
-├── ai_analyzer.py          # OpenAI vision + JSON parsing
+├── fractal_signals.py      # Free 5m fractal logic (default mode)
+├── webhook_server.py       # Optional TradingView webhooks (Pro)
+├── tv_signal_parser.py     # Parse alert JSON / pipe payloads
+├── screenshot.py           # Screenshot mode only (Playwright)
+├── ai_analyzer.py          # OpenAI vision (screenshot mode)
 ├── risk_manager.py         # Position sizing + loss limits
 ├── trade_executor.py       # Full trade cycle
 ├── trade_journal.py        # CSV audit log

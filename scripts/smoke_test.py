@@ -1,4 +1,4 @@
-"""Quick smoke test: imports, config, one paper trade cycle (mocked AI)."""
+"""Quick smoke test: imports, config, one paper trade cycle (mocked candles)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,7 @@ sys.path.insert(0, str(BOT_ROOT))
 
 
 def main() -> int:
-    os.environ.setdefault("OPENAI_API_KEY", "sk-" + "test" * 20)
-    os.environ.setdefault(
-        "TRADINGVIEW_CHART_URL",
-        "https://www.tradingview.com/chart/smoke/",
-    )
+    os.environ.setdefault("SIGNAL_MODE", "candles")
     os.environ.setdefault("LIVE_TRADING", "false")
 
     print("1. Loading settings...")
@@ -24,12 +20,20 @@ def main() -> int:
 
     settings = load_settings()
     assert settings.is_paper
-    print("   OK — paper mode")
+    assert settings.uses_candles
+    print("   OK — paper + candles mode")
 
-    print("2. Security validators...")
-    from security_utils import validate_tradingview_url
+    print("2. Fractal parser...")
+    from fractal_signals import Candle, evaluate_fractal_signal
 
-    validate_tradingview_url(settings.tradingview_chart_url)
+    candles = [
+        Candle(t=i * 300_000, open=3500 + i, high=3510 + i, low=3490 + i, close=3505 + i)
+        for i in range(30)
+    ]
+    sig = evaluate_fractal_signal(
+        candles, None, risk_reward=2.0, require_nested=False, last_signal_candle_t=None
+    )
+    assert sig is not None
     print("   OK")
 
     print("3. Paper client + risk...")
@@ -46,14 +50,13 @@ def main() -> int:
         td_path = Path(td)
         import config as cfg
 
-        patches: dict[str, Path] = {
+        patches = {
+            "DATA_DIR": td_path,
             "PAPER_STATE_PATH": td_path / "paper.json",
             "RISK_STATE_PATH": td_path / "risk.json",
             "COOLDOWN_STATE_PATH": td_path / "cooldown.json",
             "JOURNAL_PATH": td_path / "journal.csv",
-            "LIVE_POSITION_PATH": td_path / "live.json",
-            "DATA_DIR": td_path,
-            "SCREENSHOTS_DIR": td_path / "shots",
+            "FRACTAL_SIGNAL_STATE_PATH": td_path / "fractal_state.json",
         }
         ctx = [patch.object(cfg, name, path) for name, path in patches.items()]
         for p in ctx:
@@ -69,33 +72,25 @@ def main() -> int:
                 TradeJournal(),
             )
 
-            fake_png = td_path / "shots" / "x.png"
-            fake_png.parent.mkdir(parents=True, exist_ok=True)
-            fake_png.write_bytes(
-                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-                b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT"
-                b"x\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+            long_signal = TradeSignal(
+                action="LONG",
+                entry=3500.0,
+                stop_loss=3475.0,
+                take_profit=3550.0,
+                raw_response='{"signal_candle_t":1}',
+                reasoning="smoke test fractal",
             )
 
-            with (
-                patch(
-                    "trade_executor.capture_chart_screenshot",
-                    return_value=fake_png,
-                ),
-                patch(
-                    "trade_executor.analyze_chart",
-                    return_value=TradeSignal(
-                        action="LONG",
-                        entry=3500.0,
-                        stop_loss=3475.0,
-                        take_profit=3550.0,
-                        raw_response="{}",
-                    ),
-                ),
-                patch.object(client, "get_mid_price", return_value=3500.0),
-            ):
-                executor.run_cycle()
+            with patch.object(client, "get_mid_price", return_value=3500.0):
+                ok, msg = executor._execute_signal(
+                    long_signal,
+                    source_label="smoke_test",
+                    screenshot_path="",
+                    available_balance=10_000.0,
+                    mode="paper",
+                )
 
+            assert ok, msg
             assert client.has_open_position()
             print("   OK — paper position opened")
 

@@ -25,6 +25,7 @@ PAPER_STATE_PATH = DATA_DIR / "paper_state.json"
 RISK_STATE_PATH = DATA_DIR / "risk_state.json"
 COOLDOWN_STATE_PATH = DATA_DIR / "cooldown_state.json"
 LIVE_POSITION_PATH = DATA_DIR / "live_position.json"
+FRACTAL_SIGNAL_STATE_PATH = DATA_DIR / "fractal_signal_state.json"
 
 # Trading constants
 COIN = "ETH"
@@ -57,10 +58,30 @@ class Settings:
     log_level: str
     screenshot_wait_ms: int
     auto_spot_to_perp: bool
+    tradingview_storage_state_path: Path | None
+    signal_mode: str
+    tradingview_webhook_secret: str
+    webhook_port: int
+    fractal_risk_reward: float
+    fractal_require_nested: bool
+    fractal_htf_interval: str
+    fractal_candle_limit: int
 
     @property
     def is_paper(self) -> bool:
         return not self.live_trading
+
+    @property
+    def uses_webhook(self) -> bool:
+        return self.signal_mode == "webhook"
+
+    @property
+    def uses_screenshot(self) -> bool:
+        return self.signal_mode == "screenshot"
+
+    @property
+    def uses_candles(self) -> bool:
+        return self.signal_mode == "candles"
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -97,6 +118,32 @@ def load_settings() -> Settings:
     wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     chart_url_raw = os.getenv("TRADINGVIEW_CHART_URL", "").strip()
+    signal_mode = os.getenv("SIGNAL_MODE", "candles").strip().lower()
+    if signal_mode not in ("candles", "webhook", "screenshot"):
+        raise ValueError('SIGNAL_MODE must be "candles", "webhook", or "screenshot"')
+
+    webhook_secret = os.getenv("TRADINGVIEW_WEBHOOK_SECRET", "").strip()
+    if signal_mode == "webhook":
+        if len(webhook_secret) < 16:
+            raise ValueError(
+                "TRADINGVIEW_WEBHOOK_SECRET is required in webhook mode (min 16 chars)"
+            )
+    elif signal_mode == "screenshot":
+        if not openai_key or len(openai_key) < 20:
+            raise ValueError("OPENAI_API_KEY is required when SIGNAL_MODE=screenshot")
+        if not chart_url_raw:
+            raise ValueError("TRADINGVIEW_CHART_URL is required when SIGNAL_MODE=screenshot")
+
+    fractal_htf = os.getenv("FRACTAL_HTF_INTERVAL", "15m").strip().lower()
+    if fractal_htf not in ("15m", "1h", "none"):
+        raise ValueError('FRACTAL_HTF_INTERVAL must be "15m", "1h", or "none"')
+
+    chart_url = ""
+    if chart_url_raw:
+        chart_url = validate_tradingview_url(chart_url_raw)
+
+    if signal_mode == "webhook" and openai_key and len(openai_key) < 20:
+        openai_key = ""
 
     if live:
         if not _env_bool("ARVOR_CONFIRM_LIVE_RISK", default=False):
@@ -111,12 +158,20 @@ def load_settings() -> Settings:
         private_key = validate_private_key_format(private_key)
         wallet = validate_eth_wallet_address(wallet)
 
-    if not openai_key or len(openai_key) < 20:
-        raise ValueError("OPENAI_API_KEY is required and appears invalid")
-    if not chart_url_raw:
-        raise ValueError("TRADINGVIEW_CHART_URL is required")
+    port_raw = os.getenv("PORT", "").strip()
+    if port_raw:
+        webhook_port = _env_int("PORT", 8080, 1, 65535)
+    else:
+        webhook_port = _env_int("WEBHOOK_PORT", 8080, 1024, 65535)
 
-    chart_url = validate_tradingview_url(chart_url_raw)
+    storage_raw = os.getenv("TRADINGVIEW_STORAGE_STATE_PATH", "").strip()
+    storage_path: Path | None = None
+    if storage_raw:
+        storage_path = Path(storage_raw).expanduser().resolve()
+        if not storage_path.is_file():
+            raise ValueError(
+                f"TRADINGVIEW_STORAGE_STATE_PATH does not exist: {storage_path}"
+            )
 
     return Settings(
         hyperliquid_private_key=private_key,
@@ -133,6 +188,14 @@ def load_settings() -> Settings:
             "AUTO_SPOT_TO_PERP",
             default=live,
         ),
+        tradingview_storage_state_path=storage_path,
+        signal_mode=signal_mode,
+        tradingview_webhook_secret=webhook_secret,
+        webhook_port=webhook_port,
+        fractal_risk_reward=_env_float("FRACTAL_RISK_REWARD", 2.0, 0.5, 10.0),
+        fractal_require_nested=_env_bool("FRACTAL_REQUIRE_NESTED", default=False),
+        fractal_htf_interval=fractal_htf,
+        fractal_candle_limit=_env_int("FRACTAL_CANDLE_LIMIT", 200, 50, 500),
     )
 
 

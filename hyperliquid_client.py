@@ -394,6 +394,53 @@ class HyperliquidClient:
         mids = resp.json()
         return float(mids[COIN])
 
+    _INTERVAL_MS = {
+        "1m": 60_000,
+        "5m": 300_000,
+        "15m": 900_000,
+        "1h": 3_600_000,
+    }
+
+    def get_candles(self, interval: str = "5m", limit: int = 200) -> list[dict[str, Any]]:
+        """Fetch OHLC candles from Hyperliquid (free public API; works in paper mode)."""
+        import time
+
+        if interval not in self._INTERVAL_MS:
+            raise ValueError(f"Unsupported interval: {interval}")
+
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - limit * self._INTERVAL_MS[interval]
+
+        if self._info is not None:
+            return self._info.candles_snapshot(COIN, interval, start_ms, end_ms)
+
+        import requests
+        from hyperliquid.utils import constants
+
+        base = (
+            constants.TESTNET_API_URL
+            if self.settings.hyperliquid_testnet
+            else constants.MAINNET_API_URL
+        )
+        resp = requests.post(
+            f"{base}/info",
+            json={
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": COIN,
+                    "interval": interval,
+                    "startTime": start_ms,
+                    "endTime": end_ms,
+                },
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected candle response: {type(data)}")
+        return data
+
     def set_leverage(self) -> None:
         """Set ETH leverage to configured value."""
         if self.settings.is_paper:

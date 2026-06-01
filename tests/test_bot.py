@@ -26,7 +26,10 @@ from security_utils import (
     validate_eth_wallet_address,
     validate_tradingview_url,
 )
+from fractal_signals import Candle, evaluate_fractal_signal, parse_hyperliquid_candles
+from screenshot import is_ai_blocked_page_reasoning, is_blocked_page_text
 from trade_journal import TradeJournal
+from tv_signal_parser import parse_tradingview_payload
 
 
 def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
@@ -41,7 +44,108 @@ def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
         paper_starting_balance=balance,
         log_level="ERROR",
         screenshot_wait_ms=8000,
+        auto_spot_to_perp=False,
+        tradingview_storage_state_path=None,
+        signal_mode="candles",
+        tradingview_webhook_secret="",
+        webhook_port=8080,
+        fractal_risk_reward=2.0,
+        fractal_require_nested=False,
+        fractal_htf_interval="15m",
+        fractal_candle_limit=200,
     )
+
+
+class TestFractalSignals(unittest.TestCase):
+    def test_long_breakout(self) -> None:
+        candles: list[Candle] = []
+        price = 3400.0
+        for i in range(40):
+            o = price
+            h = price + 5
+            low = price - 5
+            c = price + 1
+            candles.append(Candle(t=i * 300_000, open=o, high=h, low=low, close=c))
+            price += 2
+
+        # Inject up fractal peak then breakout on last closed bar
+        candles[-3] = Candle(
+            t=candles[-3].t,
+            open=candles[-3].open,
+            high=candles[-3].high + 80,
+            low=candles[-3].low,
+            close=candles[-3].close,
+        )
+        breakout_close = candles[-3].high + 10
+        candles[-2] = Candle(
+            t=candles[-2].t,
+            open=candles[-2].open,
+            high=breakout_close + 5,
+            low=candles[-2].low,
+            close=breakout_close - 5,
+        )
+        candles[-1] = Candle(
+            t=candles[-1].t,
+            open=breakout_close - 2,
+            high=breakout_close + 5,
+            low=breakout_close - 10,
+            close=breakout_close,
+        )
+
+        sig = evaluate_fractal_signal(
+            candles,
+            None,
+            risk_reward=2.0,
+            require_nested=False,
+            last_signal_candle_t=None,
+        )
+        assert sig is not None
+        self.assertIn(sig.action, ("LONG", "NO_TRADE"))
+
+    def test_parse_hl_candles(self) -> None:
+        raw = [
+            {"t": 1, "o": "100", "h": "110", "l": "90", "c": "105"},
+            {"t": 2, "o": "105", "h": "115", "l": "95", "c": "110"},
+        ]
+        parsed = parse_hyperliquid_candles(raw)
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0].close, 105.0)
+
+
+class TestTradingViewWebhookParser(unittest.TestCase):
+    def test_json_payload(self) -> None:
+        body = (
+            '{"action":"LONG","entry":3500,"stop_loss":3480,"take_profit":3550,'
+            '"reasoning":"Nested Fractal LONG"}'
+        )
+        sig = parse_tradingview_payload(body)
+        assert sig is not None
+        self.assertEqual(sig.action, "LONG")
+        self.assertEqual(sig.entry, 3500.0)
+
+    def test_pipe_payload(self) -> None:
+        sig = parse_tradingview_payload("SHORT|3500|3520|3450")
+        assert sig is not None
+        self.assertEqual(sig.action, "SHORT")
+
+
+class TestScreenshotBlockedDetection(unittest.TestCase):
+    def test_blocked_page_text(self) -> None:
+        self.assertTrue(is_blocked_page_text("Error 403 Forbidden"))
+        self.assertTrue(is_blocked_page_text("Sign in to continue using TradingView"))
+        self.assertFalse(is_blocked_page_text("ETHUSDT 5m Nested Fractal LONG TP: 3500"))
+
+    def test_ai_blocked_reasoning(self) -> None:
+        self.assertTrue(
+            is_ai_blocked_page_reasoning(
+                "The image shows a 403 error page instead of a TradingView chart."
+            )
+        )
+        self.assertFalse(
+            is_ai_blocked_page_reasoning(
+                "LONG panel visible with gold TP and orange SL lines."
+            )
+        )
 
 
 class TestSecurityUtils(unittest.TestCase):
@@ -187,27 +291,35 @@ class TestHyperliquidPaper(unittest.TestCase):
 
 
 class TestConfig(unittest.TestCase):
-    def test_load_settings_paper(self) -> None:
+    def test_load_settings_candles_paper(self) -> None:
+        env = {"LIVE_TRADING": "false"}
+        with patch.dict(os.environ, env, clear=True):
+            s = load_settings()
+        self.assertFalse(s.live_trading)
+        self.assertEqual(s.signal_mode, "candles")
+
+    def test_load_settings_screenshot_paper(self) -> None:
         env = {
+            "SIGNAL_MODE": "screenshot",
             "OPENAI_API_KEY": "sk-" + "a" * 48,
             "TRADINGVIEW_CHART_URL": "https://www.tradingview.com/chart/test/",
             "LIVE_TRADING": "false",
         }
-        with patch.dict(os.environ, env, clear=False):
+        with patch.dict(os.environ, env, clear=True):
             s = load_settings()
         self.assertFalse(s.live_trading)
         self.assertTrue(s.is_paper)
 
     def test_live_requires_confirm(self) -> None:
         env = {
-            "OPENAI_API_KEY": "sk-" + "a" * 48,
-            "TRADINGVIEW_CHART_URL": "https://www.tradingview.com/chart/test/",
+            "SIGNAL_MODE": "webhook",
+            "TRADINGVIEW_WEBHOOK_SECRET": "x" * 24,
             "LIVE_TRADING": "true",
             "HYPERLIQUID_PRIVATE_KEY": "0x" + "1" * 64,
             "HYPERLIQUID_WALLET_ADDRESS": "0x" + "b" * 40,
             "ARVOR_CONFIRM_LIVE_RISK": "false",
         }
-        with patch.dict(os.environ, env, clear=False):
+        with patch.dict(os.environ, env, clear=True):
             with self.assertRaises(ValueError):
                 load_settings()
 

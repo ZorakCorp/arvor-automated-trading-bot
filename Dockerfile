@@ -11,4 +11,6 @@ COPY . .
 # Persist journal and state on a mounted volume at /app/data
 ENV PYTHONUNBUFFERED=1
 
+EXPOSE 8080
+
 CMD ["python", "main.py"]

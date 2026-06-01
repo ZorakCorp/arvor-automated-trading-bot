@@ -10,13 +10,64 @@ from config import SCREENSHOTS_DIR, Settings
 
 logger = logging.getLogger(__name__)
 
+# Realistic desktop Chrome — reduces headless/datacenter blocks vs default Playwright UA
+_CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
 # TradingView UI selectors (best-effort; site layout can change)
 _CHART_SELECTORS = (
     "div.chart-container",
     "div.chart-markup-table",
     "canvas",
     "#tv_chart_container",
+    "[class*='chart-container']",
 )
+
+# Substrings in page HTML/title that indicate the chart did not load
+_BLOCKED_PAGE_MARKERS = (
+    "403 forbidden",
+    "error 403",
+    "access denied",
+    "request blocked",
+    "cloudflare",
+    "just a moment",  # CF challenge
+    "enable javascript",
+    "captcha",
+    "sign in to continue",
+    "log in to continue",
+    "you need to log in",
+)
+
+# AI sometimes reports a blocked page when we missed pre-flight checks
+_AI_BLOCKED_REASONING_MARKERS = (
+    "403",
+    "forbidden",
+    "error page",
+    "not a tradingview",
+    "instead of a tradingview",
+    "instead of a chart",
+    "no chart data",
+    "cloudflare",
+    "access denied",
+    "login page",
+    "sign in",
+)
+
+
+def is_blocked_page_text(text: str) -> bool:
+    """True if page body/title looks like an error or auth wall, not a chart."""
+    lowered = text.lower()
+    return any(marker in lowered for marker in _BLOCKED_PAGE_MARKERS)
+
+
+def is_ai_blocked_page_reasoning(reasoning: str) -> bool:
+    """True if vision model reports it saw an error/login page instead of a chart."""
+    if not reasoning:
+        return False
+    lowered = reasoning.lower()
+    return any(marker in lowered for marker in _AI_BLOCKED_REASONING_MARKERS)
 
 
 def _dismiss_overlays(page) -> None:
@@ -50,6 +101,52 @@ def _hide_side_toolbars(page) -> None:
         pass
 
 
+def _page_looks_blocked(page) -> tuple[bool, str]:
+    """Inspect title, URL, and body for auth walls / 403 / bot challenges."""
+    try:
+        title = (page.title() or "").strip()
+    except Exception:
+        title = ""
+    try:
+        url = (page.url or "").lower()
+    except Exception:
+        url = ""
+
+    if "403" in title.lower() or "forbidden" in title.lower():
+        return True, f"page title: {title!r}"
+
+    if "/accounts/signin" in url or "/accounts/login" in url:
+        return True, "redirected to TradingView login"
+
+    try:
+        body_snippet = page.evaluate(
+            "() => (document.body && document.body.innerText || '').slice(0, 4000)"
+        )
+    except Exception:
+        body_snippet = ""
+
+    combined = f"{title}\n{body_snippet}"
+    if is_blocked_page_text(combined):
+        return True, "page content matches blocked/error markers"
+
+    return False, ""
+
+
+def _chart_widget_visible(page) -> bool:
+    """True if a chart canvas/container with reasonable size is on screen."""
+    for selector in _CHART_SELECTORS:
+        try:
+            loc = page.locator(selector).first
+            if not loc.is_visible(timeout=5000):
+                continue
+            box = loc.bounding_box()
+            if box and box["width"] > 400 and box["height"] > 300:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _screenshot_chart_area(page, output_path: Path) -> bool:
     """Try to screenshot only the chart widget; fall back to full viewport."""
     for selector in _CHART_SELECTORS:
@@ -66,11 +163,24 @@ def _screenshot_chart_area(page, output_path: Path) -> bool:
     return True
 
 
+def _log_tradingview_access_help() -> None:
+    logger.error(
+        "TradingView did not load the chart (403/login/bot block). Fixes:\n"
+        "  1. Open TRADINGVIEW_CHART_URL in a private/incognito window — it must show "
+        "ETH 5m + Nested Fractal without logging in.\n"
+        "  2. TradingView → chart → Share → enable public link; use that URL.\n"
+        "  3. On Railway, set TRADINGVIEW_STORAGE_STATE_PATH=/app/data/tv_auth.json "
+        "(Playwright storage from a logged-in session: "
+        "playwright codegen --save-storage=tv_auth.json https://www.tradingview.com)\n"
+        "  4. Increase SCREENSHOT_WAIT_MS (e.g. 30000) if the chart is slow to paint."
+    )
+
+
 def capture_chart_screenshot(settings: Settings) -> Path | None:
     """
     Open TradingView chart URL and save a PNG screenshot.
     Optimized for "Nested Fractal - Clean" (gold TP, orange SL, signal panel).
-    Returns path on success, None on failure.
+    Returns path on success, None on failure (blocked page, missing chart, etc.).
     """
     url = settings.tradingview_chart_url
     if not url:
@@ -98,31 +208,73 @@ def capture_chart_screenshot(settings: Settings) -> Path | None:
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
                 ],
             )
-            context = browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                device_scale_factor=2,  # sharper text for TP:/SL: labels
-            )
+            context_kwargs: dict = {
+                "viewport": {"width": 1920, "height": 1080},
+                "device_scale_factor": 2,
+                "user_agent": _CHROME_USER_AGENT,
+                "locale": "en-US",
+                "timezone_id": "America/New_York",
+                "extra_http_headers": {
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                },
+            }
+            storage_path = settings.tradingview_storage_state_path
+            if storage_path:
+                logger.info("Using TradingView session: %s", storage_path)
+                context_kwargs["storage_state"] = str(storage_path)
+
+            context = browser.new_context(**context_kwargs)
             page = context.new_page()
             page.set_default_timeout(90_000)
 
             logger.info("Loading TradingView chart: %s", url)
-            page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+            response = page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+            if response is not None and response.status >= 400:
+                logger.error(
+                    "TradingView HTTP %s for %s", response.status, response.url
+                )
+                browser.close()
+                _log_tradingview_access_help()
+                return None
 
-            # Initial paint + indicator script execution
             page.wait_for_timeout(min(wait_ms, 12_000))
             _dismiss_overlays(page)
 
-            # Extra time for Nested Fractal boxes/lines (drawn on barstate.islast)
             remaining = max(0, wait_ms - 12_000)
             if remaining:
                 page.wait_for_timeout(remaining)
 
+            blocked, reason = _page_looks_blocked(page)
+            if blocked:
+                logger.error("TradingView page blocked before screenshot: %s", reason)
+                debug_path = SCREENSHOTS_DIR / f"eth_5m_{timestamp}_blocked.png"
+                try:
+                    page.screenshot(path=str(debug_path), full_page=False)
+                    logger.info("Debug screenshot saved: %s", debug_path)
+                except Exception:
+                    pass
+                browser.close()
+                _log_tradingview_access_help()
+                return None
+
+            if not _chart_widget_visible(page):
+                logger.warning(
+                    "No chart canvas detected — page may be login-gated or still loading"
+                )
+                blocked2, reason2 = _page_looks_blocked(page)
+                if blocked2:
+                    logger.error("TradingView blocked: %s", reason2)
+                    browser.close()
+                    _log_tradingview_access_help()
+                    return None
+
             _hide_side_toolbars(page)
             page.wait_for_timeout(2_000)
 
-            # Reload last bar drawings (scroll trick nudges chart refresh)
             try:
                 page.mouse.wheel(0, 100)
                 page.wait_for_timeout(500)
