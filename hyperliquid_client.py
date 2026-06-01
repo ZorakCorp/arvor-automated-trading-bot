@@ -153,6 +153,29 @@ class HyperliquidClient:
             logger.warning("Invalid live position meta: %s", exc)
             return None
 
+    @staticmethod
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_spot_usdc_available(self) -> float:
+        """USDC in spot wallet (bot trades perps — spot must be transferred)."""
+        try:
+            spot_state = self._info.spot_user_state(self._wallet_address)
+        except Exception as exc:
+            logger.debug("Could not fetch spot balance: %s", exc)
+            return 0.0
+        for bal in spot_state.get("balances", []):
+            if bal.get("coin") == "USDC":
+                total = self._to_float(bal.get("total"))
+                hold = self._to_float(bal.get("hold"))
+                return max(0.0, total - hold)
+        return 0.0
+
     def get_account(self) -> AccountSnapshot:
         """Return balance and open position."""
         if self.settings.is_paper:
@@ -164,8 +187,32 @@ class HyperliquidClient:
 
         state = self._info.user_state(self._wallet_address)
         margin = state.get("marginSummary", {})
-        balance = float(margin.get("accountValue", 0))
-        withdrawable = float(state.get("withdrawable", balance))
+        balance = self._to_float(margin.get("accountValue"))
+        withdrawable = self._to_float(state.get("withdrawable"), balance)
+        spot_usdc = self._get_spot_usdc_available()
+
+        if spot_usdc > 0 and withdrawable < 0.01:
+            logger.warning(
+                "You have $%.2f USDC in SPOT but $%.2f in PERPS for %s. "
+                "ETH perps need funds in the Perps wallet — in Hyperliquid: "
+                "Portfolio → Transfer → Spot to Perps.",
+                spot_usdc,
+                withdrawable,
+                self._wallet_address,
+            )
+        elif balance < 0.01 and spot_usdc < 0.01:
+            logger.warning(
+                "No perps or spot USDC for %s — deposit or check HYPERLIQUID_WALLET_ADDRESS.",
+                self._wallet_address,
+            )
+        else:
+            logger.info(
+                "Balances for %s — perps: $%.2f (withdrawable $%.2f) | spot USDC: $%.2f",
+                self._wallet_address[:10] + "...",
+                balance,
+                withdrawable,
+                spot_usdc,
+            )
 
         position = None
         for ap in state.get("assetPositions", []):

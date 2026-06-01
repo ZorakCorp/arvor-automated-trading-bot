@@ -71,7 +71,12 @@ def main() -> None:
     try:
         account = client.get_account()
         risk.sync_balance(account.balance_usd)
-        log.info("Account balance: $%.2f | Win rate stats: %s", account.balance_usd, risk.stats)
+        log.info(
+            "Perps balance: $%.2f (available $%.2f) | Win rate: %s",
+            account.balance_usd,
+            account.available_usd,
+            risk.stats,
+        )
     except Exception as exc:
         log.error("Failed to read account on startup: %s", exc)
         if settings.live_trading:

@@ -123,7 +123,10 @@ class RiskManager:
     def can_trade(self, current_balance: float) -> tuple[bool, str]:
         """Return (allowed, reason)."""
         if current_balance <= 0:
-            return False, "No available balance"
+            return (
+                False,
+                "No perps balance — transfer USDC Spot→Perps on Hyperliquid (bot trades ETH perps only)",
+            )
 
         if self._state is None:
             self.sync_balance(current_balance)
