@@ -57,6 +57,14 @@ class TradeExecutor:
 
         self.risk.sync_balance(account.balance_usd)
 
+        if (
+            not self.settings.is_paper
+            and account.available_usd < 0.01
+            and self.client.transfer_spot_to_perps_if_needed()
+        ):
+            account = self.client.get_account()
+            self.risk.sync_balance(account.balance_usd)
+
         if account.position is not None:
             logger.info("Position open (%s) — monitoring only", account.position.side)
             return

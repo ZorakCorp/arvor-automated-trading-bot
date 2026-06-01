@@ -56,6 +56,7 @@ class Settings:
     paper_starting_balance: float
     log_level: str
     screenshot_wait_ms: int
+    auto_spot_to_perp: bool
 
     @property
     def is_paper(self) -> bool:
@@ -128,6 +129,10 @@ def load_settings() -> Settings:
         paper_starting_balance=_env_float("PAPER_STARTING_BALANCE", 10000.0, 1.0, 1_000_000_000.0),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         screenshot_wait_ms=_env_int("SCREENSHOT_WAIT_MS", 18000, 8000, 120_000),
+        auto_spot_to_perp=_env_bool(
+            "AUTO_SPOT_TO_PERP",
+            default=live,
+        ),
     )
 
 

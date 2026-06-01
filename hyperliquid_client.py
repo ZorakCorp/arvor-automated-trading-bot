@@ -193,12 +193,10 @@ class HyperliquidClient:
 
         if spot_usdc > 0 and withdrawable < 0.01:
             logger.warning(
-                "You have $%.2f USDC in SPOT but $%.2f in PERPS for %s. "
-                "ETH perps need funds in the Perps wallet — in Hyperliquid: "
-                "Portfolio → Transfer → Spot to Perps.",
+                "You have $%.2f USDC in SPOT but $%.2f in PERPS. "
+                "Bot will auto-transfer Spot→Perps if AUTO_SPOT_TO_PERP=true.",
                 spot_usdc,
                 withdrawable,
-                self._wallet_address,
             )
         elif balance < 0.01 and spot_usdc < 0.01:
             logger.warning(
@@ -241,6 +239,45 @@ class HyperliquidClient:
             available_usd=withdrawable,
             position=position,
         )
+
+    def transfer_spot_to_perps_if_needed(self) -> bool:
+        """
+        Move available spot USDC to perps via Hyperliquid API.
+        Use when UI transfer is blocked or unavailable.
+        """
+        if self.settings.is_paper or not self.settings.auto_spot_to_perp:
+            return False
+
+        spot = self._get_spot_usdc_available()
+        if spot < 0.01:
+            return False
+
+        state = self._info.user_state(self._wallet_address)
+        withdrawable = self._to_float(state.get("withdrawable"))
+        if withdrawable >= 0.01:
+            return False
+
+        amount = round(spot, 2)
+        if amount < 0.01:
+            logger.warning("Spot balance $%.4f too small to transfer", spot)
+            return False
+
+        logger.info("Auto-transferring $%.2f USDC Spot → Perps...", amount)
+        try:
+            result = self._exchange.usd_class_transfer(amount, to_perp=True)
+        except Exception as exc:
+            logger.error("Spot→Perps transfer failed: %s", redact_for_log(str(exc)))
+            return False
+
+        if isinstance(result, dict) and result.get("status") == "ok":
+            logger.info("Spot→Perps transfer OK — $%.2f moved to perps wallet", amount)
+            return True
+
+        logger.error(
+            "Spot→Perps transfer rejected: %s",
+            redact_for_log(str(result)),
+        )
+        return False
 
     def get_mid_price(self) -> float:
         """Current ETH mid price."""
