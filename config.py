@@ -140,7 +140,10 @@ def load_settings() -> Settings:
 
     chart_url = ""
     if chart_url_raw:
-        chart_url = validate_tradingview_url(chart_url_raw)
+        if signal_mode == "screenshot":
+            chart_url = validate_tradingview_url(chart_url_raw)
+        else:
+            chart_url = chart_url_raw.strip()
 
     if signal_mode == "webhook" and openai_key and len(openai_key) < 20:
         openai_key = ""
@@ -169,9 +172,11 @@ def load_settings() -> Settings:
     if storage_raw:
         storage_path = Path(storage_raw).expanduser().resolve()
         if not storage_path.is_file():
-            raise ValueError(
-                f"TRADINGVIEW_STORAGE_STATE_PATH does not exist: {storage_path}"
-            )
+            if signal_mode == "screenshot":
+                raise ValueError(
+                    f"TRADINGVIEW_STORAGE_STATE_PATH does not exist: {storage_path}"
+                )
+            storage_path = None
 
     return Settings(
         hyperliquid_private_key=private_key,

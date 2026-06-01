@@ -79,7 +79,7 @@ class TradeExecutor:
             return
 
         if self.settings.uses_webhook:
-            logger.debug("Webhook mode — waiting for TradingView alerts")
+            logger.info("Webhook mode — waiting for TradingView alerts")
             return
 
         if self.cooldown.is_active():
@@ -176,14 +176,22 @@ class TradeExecutor:
             last_signal_candle_t=last_t,
         )
         if signal is None:
+            logger.warning("Fractal scan returned no result (insufficient candle data)")
             return
 
         candle_t = signal_candle_time(signal)
         if candle_t is not None:
             self._save_fractal_state(candle_t)
 
+        last_close = candles_5m[-1].close if candles_5m else 0.0
+
         if signal.action == "NO_TRADE":
-            logger.debug("Fractal scan: %s", signal.reasoning)
+            logger.info(
+                "Fractal scan: %s | ETH ~$%.2f | %d bars",
+                signal.reasoning,
+                last_close,
+                len(candles_5m),
+            )
             return
 
         log_signal_decision(signal)

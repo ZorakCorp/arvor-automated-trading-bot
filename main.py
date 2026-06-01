@@ -106,7 +106,10 @@ def main() -> None:
         if settings.live_trading:
             sys.exit(1)
 
+    cycle_num = 0
     while _running:
+        cycle_num += 1
+        log.info("Cycle %d — running...", cycle_num)
         try:
             executor.run_cycle()
         except Exception as exc:
@@ -115,7 +118,7 @@ def main() -> None:
         if not _running:
             break
 
-        log.debug("Sleeping %s seconds until next cycle", LOOP_INTERVAL_SECONDS)
+        log.info("Cycle %d complete — next scan in %ss", cycle_num, LOOP_INTERVAL_SECONDS)
         for _ in range(LOOP_INTERVAL_SECONDS):
             if not _running:
                 break
