@@ -95,8 +95,19 @@ class HyperliquidClient:
             base_url,
             account_address=account_address,
         )
+        self._signer_address = wallet.address
         self._info = Info(base_url, skip_ws=True)
         logger.info("Live Hyperliquid client initialized (%s)", base_url)
+
+        if derived.lower() != configured:
+            logger.warning(
+                "API wallet mode: signer=%s | funded account=%s — "
+                "Spot→Perps auto-transfer requires the MAIN wallet private key.",
+                self._signer_address,
+                self._wallet_address,
+            )
+        else:
+            logger.info("Wallet address: %s", self._wallet_address)
 
     def _load_min_order_size(self) -> None:
         try:
@@ -244,6 +255,7 @@ class HyperliquidClient:
         """
         Move available spot USDC to perps via Hyperliquid API.
         Use when UI transfer is blocked or unavailable.
+        Requires private key to match HYPERLIQUID_WALLET_ADDRESS (main wallet).
         """
         if self.settings.is_paper or not self.settings.auto_spot_to_perp:
             return False
@@ -255,6 +267,21 @@ class HyperliquidClient:
         state = self._info.user_state(self._wallet_address)
         withdrawable = self._to_float(state.get("withdrawable"))
         if withdrawable >= 0.01:
+            return False
+
+        signer = getattr(self, "_signer_address", "").lower()
+        funded = self._wallet_address.lower()
+        if signer != funded:
+            logger.error(
+                "Cannot transfer Spot→Perps: your $%.2f is on %s but "
+                "HYPERLIQUID_PRIVATE_KEY controls %s. "
+                "Fix Railway: use the private key for %s (MetaMask → Account details → Show private key). "
+                "HYPERLIQUID_WALLET_ADDRESS must match that same address.",
+                spot,
+                self._wallet_address,
+                self._signer_address,
+                self._wallet_address,
+            )
             return False
 
         amount = round(spot, 2)
