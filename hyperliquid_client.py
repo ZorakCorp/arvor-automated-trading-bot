@@ -74,15 +74,28 @@ class HyperliquidClient:
         )
         wallet = Account.from_key(self.settings.hyperliquid_private_key)
         derived = wallet.address
-        configured = self.settings.hyperliquid_wallet_address
-        if derived.lower() != configured.lower():
-            raise ValueError(
-                "HYPERLIQUID_PRIVATE_KEY does not match HYPERLIQUID_WALLET_ADDRESS"
+        configured = self.settings.hyperliquid_wallet_address.lower()
+
+        # Main wallet: private key address must match HYPERLIQUID_WALLET_ADDRESS.
+        # API wallet (recommended): key is the API agent; address is your main account.
+        account_address: str | None = None
+        if derived.lower() == configured:
+            self._wallet_address = self.settings.hyperliquid_wallet_address
+            logger.info("Live mode: main wallet (%s)", self._wallet_address[:10] + "...")
+        else:
+            account_address = self.settings.hyperliquid_wallet_address
+            self._wallet_address = account_address
+            logger.info(
+                "Live mode: API wallet signs for main account %s",
+                self._wallet_address[:10] + "...",
             )
 
-        self._exchange = Exchange(wallet, base_url)
+        self._exchange = Exchange(
+            wallet,
+            base_url,
+            account_address=account_address,
+        )
         self._info = Info(base_url, skip_ws=True)
-        self._wallet_address = configured
         logger.info("Live Hyperliquid client initialized (%s)", base_url)
 
     def _load_min_order_size(self) -> None:
