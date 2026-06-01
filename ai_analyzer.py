@@ -65,19 +65,30 @@ WHEN TO RETURN NO_TRADE
 * Conflicting or ambiguous signal.
 
 ══════════════════════════════════════════════════════════════════════════════
+REASONING (required for every response)
+══════════════════════════════════════════════════════════════════════════════
+
+Always include "reasoning": a short plain-English explanation (2–5 sentences) of WHAT you see
+on the chart and WHY you chose this action. Be specific about indicator elements.
+
+* NO_TRADE reasoning — state what is missing or unclear (e.g. no TP/SL panel, stale lines, wrong timeframe).
+* LONG reasoning — cite LONG panel, entry, gold TP, orange SL, confidence %, trend alignment if visible.
+* SHORT reasoning — cite SHORT panel, entry, gold TP, orange SL, confidence %, trend alignment if visible.
+
+══════════════════════════════════════════════════════════════════════════════
 OUTPUT RULES
 ══════════════════════════════════════════════════════════════════════════════
 
 * ETH 5-minute chart only. No news. No outside data.
-* Do not explain. Return ONLY valid JSON. No markdown.
+* Return ONLY valid JSON. No markdown. No text outside the JSON object.
 
 Examples:
 
-{"action": "LONG", "entry": 3500.00, "stop_loss": 3475.00, "take_profit": 3550.00}
+{"action": "LONG", "entry": 3500.00, "stop_loss": 3475.00, "take_profit": 3550.00, "reasoning": "Active LONG signal: gold TP at 3550, orange SL at 3475, entry dashed line at 3500. LONG panel visible with confidence above threshold. Geometry valid for long."}
 
-{"action": "SHORT", "entry": 3500.00, "stop_loss": 3525.00, "take_profit": 3450.00}
+{"action": "SHORT", "entry": 3500.00, "stop_loss": 3525.00, "take_profit": 3450.00, "reasoning": "Active SHORT signal: panel shows SHORT, SL above entry at 3525, TP below at 3450. Fractal signal box present. Prices read from labels."}
 
-{"action": "NO_TRADE"}"""
+{"action": "NO_TRADE", "reasoning": "No active Nested Fractal setup: gold TP and orange SL lines not visible together with a LONG/SHORT panel. Chart is ETH 5m but indicator has not fired a tradeable signal."}"""
 
 
 @dataclass
@@ -88,7 +99,16 @@ class TradeSignal:
     entry: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
+    reasoning: str = ""
     raw_response: str = ""
+
+
+def _parse_reasoning(data: dict[str, Any]) -> str:
+    """Extract and cap reasoning text."""
+    text = str(data.get("reasoning", "")).strip()
+    if not text:
+        return "No reasoning provided."
+    return text[:2000]
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -163,7 +183,7 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
                     ],
                 }
             ],
-            max_tokens=300,
+            max_tokens=500,
             temperature=0.0,
         )
     except Exception as exc:
@@ -192,8 +212,10 @@ def parse_trade_signal(data: dict[str, Any], raw: str = "") -> TradeSignal | Non
         logger.error("Invalid action in AI response: %s", action)
         return None
 
+    reasoning = _parse_reasoning(data)
+
     if action == "NO_TRADE":
-        return TradeSignal(action="NO_TRADE", raw_response=raw)
+        return TradeSignal(action="NO_TRADE", reasoning=reasoning, raw_response=raw)
 
     try:
         entry = validate_eth_price(float(data["entry"]), "entry")
@@ -217,5 +239,12 @@ def parse_trade_signal(data: dict[str, Any], raw: str = "") -> TradeSignal | Non
         entry=entry,
         stop_loss=stop_loss,
         take_profit=take_profit,
+        reasoning=reasoning,
         raw_response=raw,
     )
+
+
+def log_signal_decision(signal: TradeSignal) -> None:
+    """Log AI action and reasoning to console."""
+    logger.info("AI decision: %s", signal.action)
+    logger.info("AI reasoning: %s", signal.reasoning or "(none)")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ai_analyzer import analyze_chart
+from ai_analyzer import analyze_chart, log_signal_decision
 from config import LEVERAGE, Settings
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
@@ -128,13 +128,15 @@ class TradeExecutor:
             self.risk.record_outcome("no_trade")
             return
 
+        log_signal_decision(signal)
+
         if signal.action == "NO_TRADE":
-            logger.info("AI signal: NO_TRADE")
             self.journal.log_no_trade(
                 "NO_TRADE",
                 str(screenshot_path),
                 signal.raw_response,
                 mode,
+                reasoning=signal.reasoning,
             )
             self.risk.record_outcome("no_trade")
             return
@@ -161,6 +163,7 @@ class TradeExecutor:
             signal.stop_loss,
             signal.take_profit,
         )
+        logger.info("Trade rationale: %s", signal.reasoning)
 
         try:
             self.client.set_leverage()
@@ -185,6 +188,7 @@ class TradeExecutor:
                     "leverage": LEVERAGE,
                     "outcome": "error",
                     "screenshot_path": str(screenshot_path),
+                    "ai_reasoning": signal.reasoning,
                     "ai_raw_response": signal.raw_response,
                     "mode": mode,
                     "notes": safe,
@@ -204,6 +208,7 @@ class TradeExecutor:
                 "outcome": "open",
                 "balance_after": round(account.balance_usd, 2),
                 "screenshot_path": str(screenshot_path),
+                "ai_reasoning": signal.reasoning,
                 "ai_raw_response": signal.raw_response,
                 "mode": mode,
                 "notes": "paper_open" if self.settings.is_paper else "orders_accepted",

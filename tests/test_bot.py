@@ -94,11 +94,25 @@ class TestAiAnalyzer(unittest.TestCase):
                 "entry": 3500.0,
                 "stop_loss": 3475.0,
                 "take_profit": 3550.0,
+                "reasoning": "LONG panel visible with TP and SL lines.",
             }
         )
         self.assertIsNotNone(sig)
         assert sig is not None
         self.assertEqual(sig.action, "LONG")
+        self.assertIn("LONG panel", sig.reasoning)
+
+    def test_parse_no_trade_with_reasoning(self) -> None:
+        sig = parse_trade_signal(
+            {
+                "action": "NO_TRADE",
+                "reasoning": "No TP/SL panel visible on chart.",
+            }
+        )
+        self.assertIsNotNone(sig)
+        assert sig is not None
+        self.assertEqual(sig.action, "NO_TRADE")
+        self.assertIn("TP/SL", sig.reasoning)
 
     def test_parse_invalid_geometry(self) -> None:
         self.assertIsNone(

@@ -24,6 +24,7 @@ JOURNAL_HEADERS = [
     "pnl",
     "balance_after",
     "screenshot_path",
+    "ai_reasoning",
     "ai_raw_response",
     "mode",
     "notes",
@@ -37,11 +38,27 @@ class TradeJournal:
         JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
         if not JOURNAL_PATH.exists():
             self._write_headers()
+        else:
+            self._migrate_headers_if_needed()
 
     def _write_headers(self) -> None:
         with JOURNAL_PATH.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=JOURNAL_HEADERS)
             writer.writeheader()
+
+    def _migrate_headers_if_needed(self) -> None:
+        """Add ai_reasoning column to existing journal files."""
+        with JOURNAL_PATH.open(newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            fieldnames = list(reader.fieldnames or [])
+            if "ai_reasoning" in fieldnames:
+                return
+            rows = list(reader)
+        with JOURNAL_PATH.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=JOURNAL_HEADERS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({h: row.get(h, "") for h in JOURNAL_HEADERS})
 
     def log_entry(self, row: dict[str, Any]) -> None:
         """Append one journal row."""
@@ -49,8 +66,8 @@ class TradeJournal:
         if not record.get("timestamp_utc"):
             record["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
 
-        # Redact secrets from notes and AI response in storage
-        for key in ("notes", "ai_raw_response"):
+        # Redact secrets from notes and AI fields in storage
+        for key in ("notes", "ai_raw_response", "ai_reasoning"):
             if record.get(key):
                 record[key] = sanitize_csv_cell(redact_for_log(str(record[key])))
 
@@ -73,6 +90,7 @@ class TradeJournal:
         screenshot_path: str,
         ai_raw: str,
         mode: str,
+        reasoning: str = "",
         notes: str = "",
     ) -> None:
         self.log_entry(
@@ -80,6 +98,7 @@ class TradeJournal:
                 "action": action,
                 "outcome": "no_trade",
                 "screenshot_path": screenshot_path,
+                "ai_reasoning": reasoning,
                 "ai_raw_response": ai_raw,
                 "mode": mode,
                 "notes": notes,
