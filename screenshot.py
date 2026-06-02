@@ -1,12 +1,17 @@
-"""Capture live ETH 5m chart screenshots via Playwright."""
+"""Capture chart images for AI vision — URL (Playwright) or Hyperliquid API fallback."""
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from config import SCREENSHOTS_DIR, Settings
+from chart_image import render_hyperliquid_chart_image
+from config import SCREENSHOTS_DIR, Settings, is_placeholder_chart_url
+
+if TYPE_CHECKING:
+    from hyperliquid_client import HyperliquidClient
 
 logger = logging.getLogger(__name__)
 
@@ -51,15 +56,12 @@ _AI_BLOCKED_REASONING_MARKERS = (
     "sign in",
 )
 
-
 def is_blocked_page_text(text: str) -> bool:
-    """True if page body/title looks like an error or auth wall, not a chart."""
     lowered = text.lower()
     return any(marker in lowered for marker in _BLOCKED_PAGE_MARKERS)
 
 
 def is_ai_blocked_page_reasoning(reasoning: str) -> bool:
-    """True if vision model reports it saw an error/login page instead of a chart."""
     if not reasoning:
         return False
     lowered = reasoning.lower()
@@ -67,7 +69,6 @@ def is_ai_blocked_page_reasoning(reasoning: str) -> bool:
 
 
 def _dismiss_overlays(page) -> None:
-    """Close cookie banners and onboarding popups."""
     for selector in (
         "button:has-text('Accept all')",
         "button:has-text('Accept')",
@@ -86,7 +87,6 @@ def _dismiss_overlays(page) -> None:
 
 
 def _hide_side_toolbars(page) -> None:
-    """Collapse panels so the chart uses more of the viewport."""
     try:
         page.keyboard.press("Alt+Shift+D")
     except Exception:
@@ -98,7 +98,6 @@ def _hide_side_toolbars(page) -> None:
 
 
 def _page_looks_blocked(page) -> tuple[bool, str]:
-    """Inspect title, URL, and body for auth walls / 403 / bot challenges."""
     try:
         title = (page.title() or "").strip()
     except Exception:
@@ -110,7 +109,6 @@ def _page_looks_blocked(page) -> tuple[bool, str]:
 
     if "403" in title.lower() or "forbidden" in title.lower():
         return True, f"page title: {title!r}"
-
     if "/accounts/signin" in url or "/accounts/login" in url:
         return True, "redirected to login page"
 
@@ -121,15 +119,12 @@ def _page_looks_blocked(page) -> tuple[bool, str]:
     except Exception:
         body_snippet = ""
 
-    combined = f"{title}\n{body_snippet}"
-    if is_blocked_page_text(combined):
+    if is_blocked_page_text(f"{title}\n{body_snippet}"):
         return True, "page content matches blocked/error markers"
-
     return False, ""
 
 
 def _chart_widget_visible(page) -> bool:
-    """True if a chart canvas/container with reasonable size is on screen."""
     for selector in _CHART_SELECTORS:
         try:
             loc = page.locator(selector).first
@@ -144,7 +139,6 @@ def _chart_widget_visible(page) -> bool:
 
 
 def _screenshot_chart_area(page, output_path: Path) -> bool:
-    """Try to screenshot only the chart widget; fall back to full viewport."""
     for selector in _CHART_SELECTORS:
         try:
             loc = page.locator(selector).first
@@ -159,36 +153,16 @@ def _screenshot_chart_area(page, output_path: Path) -> bool:
     return True
 
 
-def _log_chart_access_help() -> None:
-    logger.error(
-        "Chart did not load (403/login/bot block). Fixes:\n"
-        "  1. Open CHART_URL in a private/incognito window — ETH 5m must be visible.\n"
-        "  2. TradingView: Share → enable public link.\n"
-        "  3. Set CHART_STORAGE_STATE_PATH=/app/data/chart_auth.json from a logged-in "
-        "Playwright session (playwright codegen --save-storage=chart_auth.json <CHART_URL>).\n"
-        "  4. Increase SCREENSHOT_WAIT_MS (e.g. 30000) if the chart loads slowly."
-    )
-
-
-def capture_chart_screenshot(settings: Settings) -> Path | None:
-    """
-    Open CHART_URL and save a PNG of the live ETH 5m chart.
-    Returns path on success, None on failure.
-    """
+def _capture_url_screenshot(settings: Settings, output_path: Path) -> bool:
+    """Playwright screenshot of CHART_URL. Returns True on success."""
     url = settings.chart_url
-
     wait_ms = max(8000, settings.screenshot_wait_ms)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    output_path = SCREENSHOTS_DIR / f"eth_5m_{timestamp}.png"
-    SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        logger.error(
-            "playwright not installed. Run: pip install playwright && playwright install chromium"
-        )
-        return None
+        logger.error("playwright not installed")
+        return False
 
     try:
         with sync_playwright() as p:
@@ -209,83 +183,111 @@ def capture_chart_screenshot(settings: Settings) -> Path | None:
                 "timezone_id": "America/New_York",
                 "extra_http_headers": {
                     "Accept-Language": "en-US,en;q=0.9",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 },
             }
-            storage_path = settings.chart_storage_state_path
-            if storage_path:
-                logger.info("Using chart session: %s", storage_path)
-                context_kwargs["storage_state"] = str(storage_path)
+            if settings.chart_storage_state_path:
+                logger.info("Using chart session: %s", settings.chart_storage_state_path)
+                context_kwargs["storage_state"] = str(settings.chart_storage_state_path)
 
             context = browser.new_context(**context_kwargs)
             page = context.new_page()
             page.set_default_timeout(90_000)
 
-            logger.info("Loading chart: %s", url)
+            logger.info("Loading chart URL: %s", url)
             response = page.goto(url, wait_until="domcontentloaded", timeout=90_000)
             if response is not None and response.status >= 400:
-                logger.error("Chart HTTP %s for %s", response.status, response.url)
+                logger.warning("Chart HTTP %s for %s", response.status, response.url)
                 browser.close()
-                _log_chart_access_help()
-                return None
+                return False
 
             page.wait_for_timeout(min(wait_ms, 12_000))
             _dismiss_overlays(page)
-
             remaining = max(0, wait_ms - 12_000)
             if remaining:
                 page.wait_for_timeout(remaining)
 
             blocked, reason = _page_looks_blocked(page)
             if blocked:
-                logger.error("Chart page blocked before screenshot: %s", reason)
-                debug_path = SCREENSHOTS_DIR / f"eth_5m_{timestamp}_blocked.png"
-                try:
-                    page.screenshot(path=str(debug_path), full_page=False)
-                    logger.info("Debug screenshot saved: %s", debug_path)
-                except Exception:
-                    pass
+                logger.warning("Chart page blocked: %s", reason)
                 browser.close()
-                _log_chart_access_help()
-                return None
+                return False
 
             if not _chart_widget_visible(page):
-                logger.warning(
-                    "No chart canvas detected — page may be login-gated or still loading"
-                )
                 blocked2, reason2 = _page_looks_blocked(page)
                 if blocked2:
-                    logger.error("Chart blocked: %s", reason2)
+                    logger.warning("Chart blocked (no canvas): %s", reason2)
                     browser.close()
-                    _log_chart_access_help()
-                    return None
+                    return False
 
             _hide_side_toolbars(page)
             page.wait_for_timeout(2_000)
-
-            try:
-                page.mouse.wheel(0, 100)
-                page.wait_for_timeout(500)
-                page.mouse.wheel(0, -100)
-                page.wait_for_timeout(1500)
-            except Exception:
-                pass
-
             _screenshot_chart_area(page, output_path)
             browser.close()
 
-        if not output_path.exists() or output_path.stat().st_size < 1000:
-            logger.error("Screenshot file missing or too small: %s", output_path)
-            return None
+        return output_path.exists() and output_path.stat().st_size >= 1000
+    except Exception as exc:
+        logger.warning("URL screenshot failed: %s", exc)
+        return False
 
-        logger.info("Screenshot saved: %s (%d bytes)", output_path, output_path.stat().st_size)
+
+def _capture_hyperliquid_api_chart(client: Any, output_path: Path) -> bool:
+    """Render 5m / 15m / 1h ETH candles from Hyperliquid (works on Railway)."""
+    if client is None:
+        logger.error("Hyperliquid client required for API chart render")
+        return False
+    return render_hyperliquid_chart_image(client, output_path)
+
+
+def capture_chart_screenshot(
+    settings: Settings,
+    client: HyperliquidClient | None = None,
+) -> Path | None:
+    """
+    Produce a chart PNG for OpenAI vision.
+
+    CHART_SOURCE:
+      - hyperliquid: API-rendered 5m/15m/1h panels only
+      - url: Playwright CHART_URL only
+      - auto (default): try URL if set, then Hyperliquid API fallback
+    """
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    output_path = SCREENSHOTS_DIR / f"eth_chart_{timestamp}.png"
+    SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    source = settings.chart_source
+
+    if source == "hyperliquid":
+        if _capture_hyperliquid_api_chart(client, output_path):
+            return output_path
+        return None
+
+    try_url = source == "url" or (
+        source == "auto"
+        and settings.chart_url
+        and not is_placeholder_chart_url(settings.chart_url)
+    )
+
+    if try_url:
+        if _capture_url_screenshot(settings, output_path):
+            logger.info(
+                "Screenshot saved (URL): %s (%d bytes)",
+                output_path,
+                output_path.stat().st_size,
+            )
+            return output_path
+        if source == "url":
+            logger.error(
+                "CHART_SOURCE=url but screenshot failed — set a public CHART_URL "
+                "or use CHART_SOURCE=auto / hyperliquid"
+            )
+            return None
+        logger.warning("URL chart failed — using Hyperliquid API chart (5m/15m/1h)")
+
+    if _capture_hyperliquid_api_chart(client, output_path):
         return output_path
 
-    except Exception as exc:
-        logger.error("Screenshot capture failed: %s", exc)
-        if output_path.exists():
-            try:
-                output_path.unlink()
-            except OSError:
-                pass
-        return None
+    logger.error(
+        "All chart capture methods failed. Set CHART_SOURCE=hyperliquid or fix CHART_URL."
+    )
+    return None

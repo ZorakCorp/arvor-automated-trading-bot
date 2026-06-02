@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,20 @@ MIN_ETH_ORDER_SIZE = 0.001
 
 DEFAULT_AI_PROMPT = build_default_ai_prompt()
 
+_PLACEHOLDER_CHART_RE = re.compile(r"/chart/\.\.\.|/chart/\.\.\./", re.IGNORECASE)
+
+
+def is_placeholder_chart_url(url: str) -> bool:
+    """True if CHART_URL is unset or still the documentation placeholder."""
+    if not url or not url.strip():
+        return True
+    lower = url.strip().lower()
+    if _PLACEHOLDER_CHART_RE.search(lower):
+        return True
+    if lower.rstrip("/").endswith("tradingview.com/chart"):
+        return True
+    return False
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -62,6 +77,7 @@ class Settings:
     screenshot_wait_ms: int
     auto_spot_to_perp: bool
     chart_storage_state_path: Path | None
+    chart_source: str
 
     @property
     def is_paper(self) -> bool:
@@ -108,10 +124,20 @@ def load_settings() -> Settings:
 
     if not openai_key or len(openai_key) < 20:
         raise ValueError("OPENAI_API_KEY is required (min 20 characters)")
-    if not chart_url_raw:
-        raise ValueError("CHART_URL is required (https:// chart link for ETH 5m)")
 
-    chart_url = validate_chart_url(chart_url_raw)
+    chart_source = os.getenv("CHART_SOURCE", "auto").strip().lower()
+    if chart_source not in ("auto", "url", "hyperliquid"):
+        raise ValueError('CHART_SOURCE must be "auto", "url", or "hyperliquid"')
+
+    chart_url = ""
+    if chart_source == "url":
+        if not chart_url_raw or is_placeholder_chart_url(chart_url_raw):
+            raise ValueError(
+                "CHART_URL must be a real https chart link when CHART_SOURCE=url"
+            )
+        chart_url = validate_chart_url(chart_url_raw)
+    elif chart_url_raw and not is_placeholder_chart_url(chart_url_raw):
+        chart_url = validate_chart_url(chart_url_raw)
 
     ai_prompt = os.getenv("AI_PROMPT", "").strip() or DEFAULT_AI_PROMPT
 
@@ -155,6 +181,7 @@ def load_settings() -> Settings:
             default=live,
         ),
         chart_storage_state_path=storage_path,
+        chart_source=chart_source,
     )
 
 

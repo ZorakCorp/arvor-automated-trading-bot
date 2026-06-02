@@ -30,6 +30,7 @@ from security_utils import (
     validate_eth_price,
     validate_eth_wallet_address,
 )
+from config import is_placeholder_chart_url
 from screenshot import is_ai_blocked_page_reasoning, is_blocked_page_text
 from trade_journal import TradeJournal
 
@@ -49,7 +50,17 @@ def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
         screenshot_wait_ms=8000,
         auto_spot_to_perp=False,
         chart_storage_state_path=None,
+        chart_source="hyperliquid",
     )
+
+
+class TestChartUrl(unittest.TestCase):
+    def test_placeholder_detection(self) -> None:
+        self.assertTrue(is_placeholder_chart_url("https://www.tradingview.com/chart/.../"))
+        self.assertTrue(is_placeholder_chart_url(""))
+        self.assertFalse(
+            is_placeholder_chart_url("https://www.tradingview.com/chart/AbCd123/MyLayout/")
+        )
 
 
 class TestScreenshotBlockedDetection(unittest.TestCase):
@@ -302,10 +313,22 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(s.live_trading)
         self.assertFalse(s.is_paper)
 
+    def test_load_settings_paper_without_chart_url(self) -> None:
+        env = {
+            "OPENAI_API_KEY": "sk-" + "a" * 48,
+            "CHART_SOURCE": "hyperliquid",
+            "LIVE_TRADING": "false",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            s = load_settings()
+        self.assertFalse(s.live_trading)
+        self.assertEqual(s.chart_source, "hyperliquid")
+        self.assertEqual(s.chart_url, "")
+
     def test_load_settings_paper(self) -> None:
         env = {
             "OPENAI_API_KEY": "sk-" + "a" * 48,
-            "CHART_URL": "https://www.tradingview.com/chart/test/",
+            "CHART_URL": "https://www.tradingview.com/chart/testlayout/",
             "LIVE_TRADING": "false",
         }
         with patch.dict(os.environ, env, clear=True):

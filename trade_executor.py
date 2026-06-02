@@ -109,7 +109,7 @@ class TradeExecutor:
         )
 
     def _attempt_new_trade_from_screenshot(self, available_balance: float, mode: str) -> None:
-        screenshot_path = capture_chart_screenshot(self.settings)
+        screenshot_path = capture_chart_screenshot(self.settings, self.client)
         if screenshot_path is None:
             logger.error("Screenshot failed — no trade")
             return

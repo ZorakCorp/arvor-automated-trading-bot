@@ -60,8 +60,9 @@ def main() -> None:
     else:
         log.info("Paper mode (LIVE_TRADING=false)")
     log.info(
-        "Chart scan every %ss → OpenAI (%s) → Hyperliquid execution",
+        "Chart scan every %ss (%s) → OpenAI (%s) → Hyperliquid execution",
         LOOP_INTERVAL_SECONDS,
+        settings.chart_source,
         settings.openai_model,
     )
     log.info("=" * 60)

@@ -25,7 +25,7 @@
 
 | Step | What happens |
 |------|----------------|
-| 1 | Playwright opens `CHART_URL` and saves a PNG of your **live ETH** chart |
+| 1 | Builds a chart PNG: **Hyperliquid API** (5m/15m/1h) or optional `CHART_URL` screenshot |
 | 2 | OpenAI vision runs the **Nestal Fractal** brain (`nestal_prompt.py`) |
 | 3 | The model answers only: **LONG**, **SHORT**, or **NO TRADE** + entry / TP / SL / confidence % |
 | 4 | If confidence ≥ 65% and geometry is valid → **Hyperliquid** places the trade (live by default) |
@@ -90,19 +90,30 @@ git clone https://github.com/ZorakCorp/arvor-automated-trading-bot.git
 cd arvor-automated-trading-bot
 ```
 
-### 2. Chart URL
+### 2. Chart source (fixes TradingView 403 on Railway)
 
-- **TradingView:** ETH layout on **5m** (ideally with 15m / 1h visible for Nestal trend layers)  
-  `https://www.tradingview.com/chart/YOUR_LAYOUT/`
-- **Hyperliquid:** `https://app.hyperliquid.xyz/trade/ETH` (select **5m** in UI)
+**Recommended:**
 
-For Railway, prefer a **public** TradingView share link, or set `CHART_STORAGE_STATE_PATH` to a Playwright storage file from a logged-in session.
+```env
+CHART_SOURCE=hyperliquid
+```
+
+No `CHART_URL` needed. The bot renders **ETH 5m + 15m + 1h** candle panels from Hyperliquid’s free API (matches Nestal micro/meso/macro).
+
+**Optional** — TradingView screenshot:
+
+```env
+CHART_SOURCE=auto
+CHART_URL=https://www.tradingview.com/chart/YOUR_REAL_ID/
+```
+
+`auto` tries `CHART_URL` first, then falls back to Hyperliquid API if blocked (403).
 
 ### 3. Railway variables
 
 ```env
 OPENAI_API_KEY=sk-...
-CHART_URL=https://www.tradingview.com/chart/YOUR_LAYOUT/
+CHART_SOURCE=hyperliquid
 LIVE_TRADING=true
 ARVOR_CONFIRM_LIVE_RISK=true
 HYPERLIQUID_PRIVATE_KEY=0x...
@@ -140,7 +151,8 @@ AI confidence: 58%
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
-| `CHART_URL` | Yes | HTTPS chart link (TradingView or Hyperliquid) |
+| `CHART_SOURCE` | — | `hyperliquid` (recommended), `auto`, or `url` |
+| `CHART_URL` | If `url`/`auto` | Real HTTPS chart link (not `...` placeholder) |
 | `HYPERLIQUID_PRIVATE_KEY` | Live | API wallet private key |
 | `HYPERLIQUID_WALLET_ADDRESS` | Live | Main `0x` wallet address |
 | `ARVOR_CONFIRM_LIVE_RISK` | Live | Must be `true` when live |
@@ -204,7 +216,7 @@ No Hyperliquid keys required. Paper balance defaults to $10,000 (`PAPER_STARTING
 | `CHART_URL is required` | Set public HTTPS chart URL |
 | `HYPERLIQUID_PRIVATE_KEY is required` | Add keys for live mode, or `LIVE_TRADING=false` |
 | `ARVOR_CONFIRM_LIVE_RISK` | Set to `true` for live |
-| Screenshot / 403 / login page | Public chart URL or `CHART_STORAGE_STATE_PATH` |
+| Screenshot / 403 / login page | Set `CHART_SOURCE=hyperliquid` (no TradingView needed) |
 | `NO_TRADE` every cycle | Normal — low fidelity / misaligned trends |
 | Confidence below 65% | Bot blocks trade even if model says LONG/SHORT |
 | Playwright locally | `pip install -r requirements.txt && playwright install chromium` |
