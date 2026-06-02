@@ -13,12 +13,13 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-# TradingView chart hosts only (blocks SSRF via file://, localhost, metadata IPs)
-_ALLOWED_TV_HOSTS = frozenset(
+# Allowed chart hosts for Playwright screenshots (blocks SSRF)
+_ALLOWED_CHART_HOSTS = frozenset(
     {
         "www.tradingview.com",
         "tradingview.com",
-        "charting-library.tradingview.com",
+        "app.hyperliquid.xyz",
+        "hyperliquid.xyz",
     }
 )
 
@@ -36,19 +37,19 @@ MAX_ETH_PRICE = 500_000.0
 MAX_SCREENSHOT_BYTES = 12 * 1024 * 1024  # 12 MiB
 
 
-def validate_tradingview_url(url: str) -> str:
+def validate_chart_url(url: str) -> str:
     """Return normalized URL or raise ValueError."""
     parsed = urlparse(url.strip())
     if parsed.scheme != "https":
-        raise ValueError("TRADINGVIEW_CHART_URL must use https://")
+        raise ValueError("CHART_URL must use https://")
     host = (parsed.hostname or "").lower()
-    if host not in _ALLOWED_TV_HOSTS:
+    if host not in _ALLOWED_CHART_HOSTS:
         raise ValueError(
-            f"TRADINGVIEW_CHART_URL host not allowed: {host!r}. "
-            f"Use a public https://www.tradingview.com/chart/... link."
+            f"CHART_URL host not allowed: {host!r}. "
+            f"Use https://www.tradingview.com/chart/... or https://app.hyperliquid.xyz/trade/ETH"
         )
     if not parsed.path or parsed.path == "/":
-        raise ValueError("TRADINGVIEW_CHART_URL must include a chart path")
+        raise ValueError("CHART_URL must include a path (e.g. /chart/... or /trade/ETH)")
     return url.strip()
 
 
@@ -113,11 +114,11 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
-def load_json_file(path: Path) -> dict[str, Any] | None:
+def load_json_file(path: Path, default: dict[str, Any] | None = None) -> dict[str, Any]:
     if not path.exists():
-        return None
+        return default if default is not None else {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Could not read %s: %s", path.name, exc)
-        return None
+        return default if default is not None else {}

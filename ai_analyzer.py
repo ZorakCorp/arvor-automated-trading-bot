@@ -1,4 +1,4 @@
-"""Send chart screenshot to OpenAI vision and parse trade JSON."""
+"""Send chart screenshot to OpenAI vision and parse Nestal Fractal response."""
 
 from __future__ import annotations
 
@@ -17,78 +17,15 @@ from security_utils import MAX_SCREENSHOT_BYTES, validate_eth_price
 
 logger = logging.getLogger(__name__)
 
-AI_PROMPT = """You are an expert ETH futures trader reading a TradingView screenshot.
+MIN_TRADE_CONFIDENCE = 65.0
 
-The chart uses the custom indicator "Nested Fractal - Clean" (Nested Fractal).
-
-Answer this question using ONLY what you see in the screenshot:
-
-"I'm using the Nested Fractal indicator — where would you place stop loss and take profit?"
-
-══════════════════════════════════════════════════════════════════════════════
-HOW TO READ THE NESTED FRACTAL INDICATOR ON THE CHART
-══════════════════════════════════════════════════════════════════════════════
-
-An ACTIVE trade setup is shown only when the indicator has fired a signal. Look for ALL of these:
-
-1. GOLD horizontal line (#FFD700) — Take Profit. Label on the right often reads "TP: <price>".
-2. ORANGE horizontal line (#FF8C00) — Stop Loss. Label on the right often reads "SL: <price>".
-3. WHITE dashed horizontal line — Entry price at signal.
-4. Signal panel (dark box) showing either "LONG" (gold text) or "SHORT" (purple text), plus a large confidence % number and entry price.
-5. Optional: "FRACTAL SIGNAL" label above the pattern box, purple curved prediction path, white pattern box.
-
-If NONE of the gold TP line, orange SL line, and LONG/SHORT panel are visible → action MUST be NO_TRADE.
-Stale/old lines from prior signals without a current panel → NO_TRADE.
-
-══════════════════════════════════════════════════════════════════════════════
-EXTRACT PRICES (read labels and line levels carefully)
-══════════════════════════════════════════════════════════════════════════════
-
-* action: "LONG" if panel says LONG; "SHORT" if panel says SHORT.
-* entry: white dashed entry line OR entry price printed in the panel.
-* stop_loss: price of the ORANGE "SL:" line (exact number from label if visible).
-* take_profit: price of the GOLD "TP:" line (exact number from label if visible).
-
-Direction rules (must match indicator geometry):
-* LONG: stop_loss < entry < take_profit
-* SHORT: take_profit < entry < stop_loss
-
-Purple prediction path is directional context only — do NOT invent prices from it if TP/SL labels exist.
-
-══════════════════════════════════════════════════════════════════════════════
-WHEN TO RETURN NO_TRADE
-══════════════════════════════════════════════════════════════════════════════
-
-* No active Nested Fractal signal (no TP + SL + LONG/SHORT panel together).
-* Cannot read TP or SL price clearly.
-* Chart is not ETH or not 5-minute (check timeframe in UI).
-* Conflicting or ambiguous signal.
-
-══════════════════════════════════════════════════════════════════════════════
-REASONING (required for every response)
-══════════════════════════════════════════════════════════════════════════════
-
-Always include "reasoning": a short plain-English explanation (2–5 sentences) of WHAT you see
-on the chart and WHY you chose this action. Be specific about indicator elements.
-
-* NO_TRADE reasoning — state what is missing or unclear (e.g. no TP/SL panel, stale lines, wrong timeframe).
-* LONG reasoning — cite LONG panel, entry, gold TP, orange SL, confidence %, trend alignment if visible.
-* SHORT reasoning — cite SHORT panel, entry, gold TP, orange SL, confidence %, trend alignment if visible.
-
-══════════════════════════════════════════════════════════════════════════════
-OUTPUT RULES
-══════════════════════════════════════════════════════════════════════════════
-
-* ETH 5-minute chart only. No news. No outside data.
-* Return ONLY valid JSON. No markdown. No text outside the JSON object.
-
-Examples:
-
-{"action": "LONG", "entry": 3500.00, "stop_loss": 3475.00, "take_profit": 3550.00, "reasoning": "Active LONG signal: gold TP at 3550, orange SL at 3475, entry dashed line at 3500. LONG panel visible with confidence above threshold. Geometry valid for long."}
-
-{"action": "SHORT", "entry": 3500.00, "stop_loss": 3525.00, "take_profit": 3450.00, "reasoning": "Active SHORT signal: panel shows SHORT, SL above entry at 3525, TP below at 3450. Fractal signal box present. Prices read from labels."}
-
-{"action": "NO_TRADE", "reasoning": "No active Nested Fractal setup: gold TP and orange SL lines not visible together with a LONG/SHORT panel. Chart is ETH 5m but indicator has not fired a tradeable signal."}"""
+# Nestal structured output (labels may be on same line or next line)
+_RE_ACTION = re.compile(r"\b(LONG|SHORT|NO\s*TRADE)\b", re.IGNORECASE)
+_RE_ENTRY = re.compile(r"Entry:\s*\n?\s*([\d,]+\.?\d*)", re.IGNORECASE)
+_RE_TP = re.compile(r"Take\s*Profit:\s*\n?\s*([\d,]+\.?\d*)", re.IGNORECASE)
+_RE_SL = re.compile(r"Stop\s*Loss:\s*\n?\s*([\d,]+\.?\d*)", re.IGNORECASE)
+_RE_CONFIDENCE = re.compile(r"Confidence:\s*\n?\s*([\d.]+)\s*%?", re.IGNORECASE)
+_RE_REASON = re.compile(r"Reason:\s*\n?\s*(.+?)(?:\n\n|\Z)", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass
@@ -99,20 +36,97 @@ class TradeSignal:
     entry: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
+    confidence: float | None = None
     reasoning: str = ""
     raw_response: str = ""
 
 
-def _parse_reasoning(data: dict[str, Any]) -> str:
-    """Extract and cap reasoning text."""
-    text = str(data.get("reasoning", "")).strip()
+def _parse_price(raw: str) -> float:
+    return float(raw.replace(",", "").strip())
+
+
+def _parse_reason_block(text: str) -> str:
+    m = _RE_REASON.search(text)
+    if not m:
+        return ""
+    return m.group(1).strip()[:500]
+
+
+def parse_nestal_response(raw: str) -> TradeSignal | None:
+    """Parse Nestal Fractal structured text output."""
+    text = raw.strip()
     if not text:
-        return "No reasoning provided."
-    return text[:2000]
+        return None
+
+    action_m = _RE_ACTION.search(text)
+    if not action_m:
+        return None
+
+    action = action_m.group(1).upper().replace(" ", "_")
+    if action == "NO_TRADE":
+        conf_m = _RE_CONFIDENCE.search(text)
+        confidence = float(conf_m.group(1)) if conf_m else None
+        reason = _parse_reason_block(text)
+        return TradeSignal(
+            action="NO_TRADE",
+            confidence=confidence,
+            reasoning=reason,
+            raw_response=raw,
+        )
+
+    if action not in ("LONG", "SHORT"):
+        return None
+
+    try:
+        entry_m = _RE_ENTRY.search(text)
+        tp_m = _RE_TP.search(text)
+        sl_m = _RE_SL.search(text)
+        conf_m = _RE_CONFIDENCE.search(text)
+        if not entry_m or not tp_m or not sl_m:
+            logger.error("Nestal response missing Entry, Take Profit, or Stop Loss")
+            return None
+
+        entry = validate_eth_price(_parse_price(entry_m.group(1)), "entry")
+        take_profit = validate_eth_price(_parse_price(tp_m.group(1)), "take_profit")
+        stop_loss = validate_eth_price(_parse_price(sl_m.group(1)), "stop_loss")
+        confidence = float(conf_m.group(1)) if conf_m else None
+    except (ValueError, TypeError) as exc:
+        logger.error("Invalid prices in Nestal response: %s", exc)
+        return None
+
+    if confidence is not None and confidence < MIN_TRADE_CONFIDENCE:
+        logger.warning(
+            "Nestal confidence %.1f%% below minimum %.0f%% — NO_TRADE",
+            confidence,
+            MIN_TRADE_CONFIDENCE,
+        )
+        return TradeSignal(
+            action="NO_TRADE",
+            confidence=confidence,
+            reasoning=f"Confidence {confidence:.0f}% below {MIN_TRADE_CONFIDENCE:.0f}%",
+            raw_response=raw,
+        )
+
+    if action == "LONG":
+        if not (stop_loss < entry < take_profit):
+            logger.error("LONG: expected stop_loss < entry < take_profit")
+            return None
+    elif not (take_profit < entry < stop_loss):
+        logger.error("SHORT: expected take_profit < entry < stop_loss")
+        return None
+
+    return TradeSignal(
+        action=action,
+        entry=entry,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        confidence=confidence,
+        raw_response=raw,
+    )
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    """Extract first valid JSON object from model response."""
+    """Extract first valid JSON object (legacy fallback)."""
     text = text.strip()
     if not text:
         return None
@@ -136,12 +150,80 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     start = text.find("{")
     while start != -1:
         try:
-            obj, end = json.JSONDecoder().raw_decode(text[start:])
+            obj, _ = json.JSONDecoder().raw_decode(text[start:])
             if isinstance(obj, dict):
                 return obj
         except json.JSONDecodeError:
             pass
         start = text.find("{", start + 1)
+    return None
+
+
+def parse_trade_signal(data: dict[str, Any], raw: str = "") -> TradeSignal | None:
+    """Validate JSON fallback (legacy)."""
+    action = str(data.get("action", "")).upper().strip().replace(" ", "_")
+    if action not in ("LONG", "SHORT", "NO_TRADE"):
+        logger.error("Invalid action in AI response: %s", action)
+        return None
+
+    reasoning = str(data.get("reasoning", "") or data.get("reason", "")).strip()[:500]
+    conf_raw = data.get("confidence")
+    confidence = float(conf_raw) if conf_raw is not None else None
+
+    if action == "NO_TRADE":
+        return TradeSignal(
+            action="NO_TRADE",
+            confidence=confidence,
+            reasoning=reasoning,
+            raw_response=raw,
+        )
+
+    try:
+        entry = validate_eth_price(float(data["entry"]), "entry")
+        stop_loss = validate_eth_price(float(data["stop_loss"]), "stop_loss")
+        take_profit = validate_eth_price(float(data["take_profit"]), "take_profit")
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.error("Missing or invalid price fields: %s", exc)
+        return None
+
+    if confidence is not None and confidence < MIN_TRADE_CONFIDENCE:
+        return TradeSignal(
+            action="NO_TRADE",
+            confidence=confidence,
+            reasoning=reasoning or f"Confidence {confidence:.0f}% below minimum",
+            raw_response=raw,
+        )
+
+    if action == "LONG":
+        if not (stop_loss < entry < take_profit):
+            logger.error("LONG: expected stop_loss < entry < take_profit")
+            return None
+    elif not (take_profit < entry < stop_loss):
+        logger.error("SHORT: expected take_profit < entry < stop_loss")
+        return None
+
+    return TradeSignal(
+        action=action,
+        entry=entry,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        confidence=confidence,
+        reasoning=reasoning,
+        raw_response=raw,
+    )
+
+
+def parse_ai_response(raw: str) -> TradeSignal | None:
+    """Parse Nestal text format first, then JSON fallback."""
+    sig = parse_nestal_response(raw)
+    if sig is not None:
+        return sig
+
+    data = _extract_json(raw)
+    if data is not None:
+        return parse_trade_signal(data, raw)
+
+    logger.error("Unrecognized AI response format: %s", raw[:500])
     return None
 
 
@@ -164,6 +246,7 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
         return None
 
     client = OpenAI(api_key=settings.openai_api_key, timeout=120.0)
+    prompt = settings.ai_prompt
 
     try:
         response = client.chat.completions.create(
@@ -172,7 +255,7 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": AI_PROMPT},
+                        {"type": "text", "text": prompt},
                         {
                             "type": "image_url",
                             "image_url": {
@@ -183,7 +266,7 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
                     ],
                 }
             ],
-            max_tokens=500,
+            max_tokens=400,
             temperature=0.0,
         )
     except Exception as exc:
@@ -195,56 +278,15 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
         return None
 
     raw = (response.choices[0].message.content or "").strip()
-    logger.debug("AI raw response: %s", raw[:200])
+    logger.debug("AI raw response: %s", raw[:300])
 
-    data = _extract_json(raw)
-    if data is None:
-        logger.error("AI returned invalid JSON: %s", raw[:500])
-        return None
-
-    return parse_trade_signal(data, raw)
-
-
-def parse_trade_signal(data: dict[str, Any], raw: str = "") -> TradeSignal | None:
-    """Validate and normalize parsed JSON."""
-    action = str(data.get("action", "")).upper().strip()
-    if action not in ("LONG", "SHORT", "NO_TRADE"):
-        logger.error("Invalid action in AI response: %s", action)
-        return None
-
-    reasoning = _parse_reasoning(data)
-
-    if action == "NO_TRADE":
-        return TradeSignal(action="NO_TRADE", reasoning=reasoning, raw_response=raw)
-
-    try:
-        entry = validate_eth_price(float(data["entry"]), "entry")
-        stop_loss = validate_eth_price(float(data["stop_loss"]), "stop_loss")
-        take_profit = validate_eth_price(float(data["take_profit"]), "take_profit")
-    except (KeyError, TypeError, ValueError) as exc:
-        logger.error("Missing or invalid price fields: %s", exc)
-        return None
-
-    if action == "LONG":
-        if not (stop_loss < entry < take_profit):
-            logger.error("LONG: expected stop_loss < entry < take_profit")
-            return None
-    else:
-        if not (take_profit < entry < stop_loss):
-            logger.error("SHORT: expected take_profit < entry < stop_loss")
-            return None
-
-    return TradeSignal(
-        action=action,
-        entry=entry,
-        stop_loss=stop_loss,
-        take_profit=take_profit,
-        reasoning=reasoning,
-        raw_response=raw,
-    )
+    return parse_ai_response(raw)
 
 
 def log_signal_decision(signal: TradeSignal) -> None:
-    """Log AI action and reasoning to console."""
+    """Log AI decision (minimal — no trade reasoning unless NO_TRADE)."""
     logger.info("AI decision: %s", signal.action)
-    logger.info("AI reasoning: %s", signal.reasoning or "(none)")
+    if signal.confidence is not None:
+        logger.info("AI confidence: %.0f%%", signal.confidence)
+    if signal.action == "NO_TRADE" and signal.reasoning:
+        logger.info("AI reason: %s", signal.reasoning)

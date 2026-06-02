@@ -1,4 +1,4 @@
-"""Capture TradingView chart screenshots via Playwright."""
+"""Capture live ETH 5m chart screenshots via Playwright."""
 
 from __future__ import annotations
 
@@ -10,29 +10,27 @@ from config import SCREENSHOTS_DIR, Settings
 
 logger = logging.getLogger(__name__)
 
-# Realistic desktop Chrome — reduces headless/datacenter blocks vs default Playwright UA
 _CHROME_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
 
-# TradingView UI selectors (best-effort; site layout can change)
 _CHART_SELECTORS = (
     "div.chart-container",
     "div.chart-markup-table",
     "canvas",
     "#tv_chart_container",
     "[class*='chart-container']",
+    "[class*='chart']",
 )
 
-# Substrings in page HTML/title that indicate the chart did not load
 _BLOCKED_PAGE_MARKERS = (
     "403 forbidden",
     "error 403",
     "access denied",
     "request blocked",
     "cloudflare",
-    "just a moment",  # CF challenge
+    "just a moment",
     "enable javascript",
     "captcha",
     "sign in to continue",
@@ -40,13 +38,11 @@ _BLOCKED_PAGE_MARKERS = (
     "you need to log in",
 )
 
-# AI sometimes reports a blocked page when we missed pre-flight checks
 _AI_BLOCKED_REASONING_MARKERS = (
     "403",
     "forbidden",
     "error page",
-    "not a tradingview",
-    "instead of a tradingview",
+    "not a chart",
     "instead of a chart",
     "no chart data",
     "cloudflare",
@@ -90,13 +86,13 @@ def _dismiss_overlays(page) -> None:
 
 
 def _hide_side_toolbars(page) -> None:
-    """Collapse panels so the chart (and Nested Fractal lines) uses more space."""
+    """Collapse panels so the chart uses more of the viewport."""
     try:
-        page.keyboard.press("Alt+Shift+D")  # TradingView: hide drawing toolbar
+        page.keyboard.press("Alt+Shift+D")
     except Exception:
         pass
     try:
-        page.keyboard.press("Control+B")  # toggle left toolbar (Windows/Linux)
+        page.keyboard.press("Control+B")
     except Exception:
         pass
 
@@ -116,7 +112,7 @@ def _page_looks_blocked(page) -> tuple[bool, str]:
         return True, f"page title: {title!r}"
 
     if "/accounts/signin" in url or "/accounts/login" in url:
-        return True, "redirected to TradingView login"
+        return True, "redirected to login page"
 
     try:
         body_snippet = page.evaluate(
@@ -163,29 +159,23 @@ def _screenshot_chart_area(page, output_path: Path) -> bool:
     return True
 
 
-def _log_tradingview_access_help() -> None:
+def _log_chart_access_help() -> None:
     logger.error(
-        "TradingView did not load the chart (403/login/bot block). Fixes:\n"
-        "  1. Open TRADINGVIEW_CHART_URL in a private/incognito window — it must show "
-        "ETH 5m + Nested Fractal without logging in.\n"
-        "  2. TradingView → chart → Share → enable public link; use that URL.\n"
-        "  3. On Railway, set TRADINGVIEW_STORAGE_STATE_PATH=/app/data/tv_auth.json "
-        "(Playwright storage from a logged-in session: "
-        "playwright codegen --save-storage=tv_auth.json https://www.tradingview.com)\n"
-        "  4. Increase SCREENSHOT_WAIT_MS (e.g. 30000) if the chart is slow to paint."
+        "Chart did not load (403/login/bot block). Fixes:\n"
+        "  1. Open CHART_URL in a private/incognito window — ETH 5m must be visible.\n"
+        "  2. TradingView: Share → enable public link.\n"
+        "  3. Set CHART_STORAGE_STATE_PATH=/app/data/chart_auth.json from a logged-in "
+        "Playwright session (playwright codegen --save-storage=chart_auth.json <CHART_URL>).\n"
+        "  4. Increase SCREENSHOT_WAIT_MS (e.g. 30000) if the chart loads slowly."
     )
 
 
 def capture_chart_screenshot(settings: Settings) -> Path | None:
     """
-    Open TradingView chart URL and save a PNG screenshot.
-    Optimized for "Nested Fractal - Clean" (gold TP, orange SL, signal panel).
-    Returns path on success, None on failure (blocked page, missing chart, etc.).
+    Open CHART_URL and save a PNG of the live ETH 5m chart.
+    Returns path on success, None on failure.
     """
-    url = settings.tradingview_chart_url
-    if not url:
-        logger.error("TRADINGVIEW_CHART_URL is not set")
-        return None
+    url = settings.chart_url
 
     wait_ms = max(8000, settings.screenshot_wait_ms)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -222,23 +212,21 @@ def capture_chart_screenshot(settings: Settings) -> Path | None:
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                 },
             }
-            storage_path = settings.tradingview_storage_state_path
+            storage_path = settings.chart_storage_state_path
             if storage_path:
-                logger.info("Using TradingView session: %s", storage_path)
+                logger.info("Using chart session: %s", storage_path)
                 context_kwargs["storage_state"] = str(storage_path)
 
             context = browser.new_context(**context_kwargs)
             page = context.new_page()
             page.set_default_timeout(90_000)
 
-            logger.info("Loading TradingView chart: %s", url)
+            logger.info("Loading chart: %s", url)
             response = page.goto(url, wait_until="domcontentloaded", timeout=90_000)
             if response is not None and response.status >= 400:
-                logger.error(
-                    "TradingView HTTP %s for %s", response.status, response.url
-                )
+                logger.error("Chart HTTP %s for %s", response.status, response.url)
                 browser.close()
-                _log_tradingview_access_help()
+                _log_chart_access_help()
                 return None
 
             page.wait_for_timeout(min(wait_ms, 12_000))
@@ -250,7 +238,7 @@ def capture_chart_screenshot(settings: Settings) -> Path | None:
 
             blocked, reason = _page_looks_blocked(page)
             if blocked:
-                logger.error("TradingView page blocked before screenshot: %s", reason)
+                logger.error("Chart page blocked before screenshot: %s", reason)
                 debug_path = SCREENSHOTS_DIR / f"eth_5m_{timestamp}_blocked.png"
                 try:
                     page.screenshot(path=str(debug_path), full_page=False)
@@ -258,7 +246,7 @@ def capture_chart_screenshot(settings: Settings) -> Path | None:
                 except Exception:
                     pass
                 browser.close()
-                _log_tradingview_access_help()
+                _log_chart_access_help()
                 return None
 
             if not _chart_widget_visible(page):
@@ -267,9 +255,9 @@ def capture_chart_screenshot(settings: Settings) -> Path | None:
                 )
                 blocked2, reason2 = _page_looks_blocked(page)
                 if blocked2:
-                    logger.error("TradingView blocked: %s", reason2)
+                    logger.error("Chart blocked: %s", reason2)
                     browser.close()
-                    _log_tradingview_access_help()
+                    _log_chart_access_help()
                     return None
 
             _hide_side_toolbars(page)

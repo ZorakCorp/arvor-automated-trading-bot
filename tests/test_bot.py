@@ -8,13 +8,17 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-# Ensure bot package root is on path
 BOT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BOT_ROOT))
 
-from ai_analyzer import _extract_json, parse_trade_signal
+from ai_analyzer import (
+    _extract_json,
+    parse_ai_response,
+    parse_nestal_response,
+    parse_trade_signal,
+)
 from config import Settings, load_settings
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
@@ -22,14 +26,12 @@ from risk_manager import RiskManager
 from security_utils import (
     atomic_write_json,
     sanitize_csv_cell,
+    validate_chart_url,
     validate_eth_price,
     validate_eth_wallet_address,
-    validate_tradingview_url,
 )
-from fractal_signals import Candle, evaluate_fractal_signal, parse_hyperliquid_candles
 from screenshot import is_ai_blocked_page_reasoning, is_blocked_page_text
 from trade_journal import TradeJournal
-from tv_signal_parser import parse_tradingview_payload
 
 
 def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
@@ -37,7 +39,8 @@ def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
         hyperliquid_private_key="",
         hyperliquid_wallet_address="",
         openai_api_key="sk-test" + "x" * 40,
-        tradingview_chart_url="https://www.tradingview.com/chart/abc123/",
+        chart_url="https://www.tradingview.com/chart/abc123/",
+        ai_prompt="test prompt",
         live_trading=False,
         hyperliquid_testnet=False,
         openai_model="gpt-4o",
@@ -45,120 +48,38 @@ def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
         log_level="ERROR",
         screenshot_wait_ms=8000,
         auto_spot_to_perp=False,
-        tradingview_storage_state_path=None,
-        signal_mode="candles",
-        tradingview_webhook_secret="",
-        webhook_port=8080,
-        fractal_risk_reward=2.0,
-        fractal_require_nested=False,
-        fractal_htf_interval="15m",
-        fractal_candle_limit=200,
+        chart_storage_state_path=None,
     )
-
-
-class TestFractalSignals(unittest.TestCase):
-    def test_long_breakout(self) -> None:
-        candles: list[Candle] = []
-        price = 3400.0
-        for i in range(40):
-            o = price
-            h = price + 5
-            low = price - 5
-            c = price + 1
-            candles.append(Candle(t=i * 300_000, open=o, high=h, low=low, close=c))
-            price += 2
-
-        # Inject up fractal peak then breakout on last closed bar
-        candles[-3] = Candle(
-            t=candles[-3].t,
-            open=candles[-3].open,
-            high=candles[-3].high + 80,
-            low=candles[-3].low,
-            close=candles[-3].close,
-        )
-        breakout_close = candles[-3].high + 10
-        candles[-2] = Candle(
-            t=candles[-2].t,
-            open=candles[-2].open,
-            high=breakout_close + 5,
-            low=candles[-2].low,
-            close=breakout_close - 5,
-        )
-        candles[-1] = Candle(
-            t=candles[-1].t,
-            open=breakout_close - 2,
-            high=breakout_close + 5,
-            low=breakout_close - 10,
-            close=breakout_close,
-        )
-
-        sig = evaluate_fractal_signal(
-            candles,
-            None,
-            risk_reward=2.0,
-            require_nested=False,
-            last_signal_candle_t=None,
-        )
-        assert sig is not None
-        self.assertIn(sig.action, ("LONG", "NO_TRADE"))
-
-    def test_parse_hl_candles(self) -> None:
-        raw = [
-            {"t": 1, "o": "100", "h": "110", "l": "90", "c": "105"},
-            {"t": 2, "o": "105", "h": "115", "l": "95", "c": "110"},
-        ]
-        parsed = parse_hyperliquid_candles(raw)
-        self.assertEqual(len(parsed), 2)
-        self.assertEqual(parsed[0].close, 105.0)
-
-
-class TestTradingViewWebhookParser(unittest.TestCase):
-    def test_json_payload(self) -> None:
-        body = (
-            '{"action":"LONG","entry":3500,"stop_loss":3480,"take_profit":3550,'
-            '"reasoning":"Nested Fractal LONG"}'
-        )
-        sig = parse_tradingview_payload(body)
-        assert sig is not None
-        self.assertEqual(sig.action, "LONG")
-        self.assertEqual(sig.entry, 3500.0)
-
-    def test_pipe_payload(self) -> None:
-        sig = parse_tradingview_payload("SHORT|3500|3520|3450")
-        assert sig is not None
-        self.assertEqual(sig.action, "SHORT")
 
 
 class TestScreenshotBlockedDetection(unittest.TestCase):
     def test_blocked_page_text(self) -> None:
         self.assertTrue(is_blocked_page_text("Error 403 Forbidden"))
-        self.assertTrue(is_blocked_page_text("Sign in to continue using TradingView"))
-        self.assertFalse(is_blocked_page_text("ETHUSDT 5m Nested Fractal LONG TP: 3500"))
+        self.assertTrue(is_blocked_page_text("Sign in to continue"))
+        self.assertFalse(is_blocked_page_text("ETHUSDT 5m chart with visible candles"))
 
     def test_ai_blocked_reasoning(self) -> None:
         self.assertTrue(
-            is_ai_blocked_page_reasoning(
-                "The image shows a 403 error page instead of a TradingView chart."
-            )
+            is_ai_blocked_page_reasoning("The image shows a 403 error page instead of a chart.")
         )
         self.assertFalse(
-            is_ai_blocked_page_reasoning(
-                "LONG panel visible with gold TP and orange SL lines."
-            )
+            is_ai_blocked_page_reasoning("5m ETH holding above swing low with clear structure.")
         )
 
 
 class TestSecurityUtils(unittest.TestCase):
-    def test_tradingview_url_allowlist(self) -> None:
-        url = validate_tradingview_url("https://www.tradingview.com/chart/ETH/")
+    def test_chart_url_allowlist(self) -> None:
+        url = validate_chart_url("https://www.tradingview.com/chart/ETH/")
         self.assertTrue(url.startswith("https://"))
+        hl = validate_chart_url("https://app.hyperliquid.xyz/trade/ETH")
+        self.assertIn("hyperliquid", hl)
 
         with self.assertRaises(ValueError):
-            validate_tradingview_url("http://www.tradingview.com/chart/x")
+            validate_chart_url("http://www.tradingview.com/chart/x")
         with self.assertRaises(ValueError):
-            validate_tradingview_url("https://evil.com/chart/x")
+            validate_chart_url("https://evil.com/chart/x")
         with self.assertRaises(ValueError):
-            validate_tradingview_url("file:///etc/passwd")
+            validate_chart_url("file:///etc/passwd")
 
     def test_wallet_validation(self) -> None:
         addr = "0x" + "a" * 40
@@ -182,6 +103,76 @@ class TestSecurityUtils(unittest.TestCase):
 
 
 class TestAiAnalyzer(unittest.TestCase):
+    def test_parse_nestal_long(self) -> None:
+        raw = """LONG
+
+Entry:
+3500.50
+
+Take Profit:
+3550.50
+
+Stop Loss:
+3475.50
+
+Confidence:
+89%"""
+        sig = parse_nestal_response(raw)
+        assert sig is not None
+        self.assertEqual(sig.action, "LONG")
+        self.assertEqual(sig.entry, 3500.50)
+        self.assertEqual(sig.confidence, 89.0)
+
+    def test_parse_nestal_no_trade(self) -> None:
+        raw = """NO TRADE
+
+Confidence:
+58%
+
+Reason:
+Low fractal fidelity"""
+        sig = parse_nestal_response(raw)
+        assert sig is not None
+        self.assertEqual(sig.action, "NO_TRADE")
+        self.assertEqual(sig.confidence, 58.0)
+        self.assertIn("fractal", sig.reasoning.lower())
+
+    def test_parse_nestal_low_confidence_becomes_no_trade(self) -> None:
+        raw = """LONG
+
+Entry:
+3500
+
+Take Profit:
+3600
+
+Stop Loss:
+3450
+
+Confidence:
+60%"""
+        sig = parse_nestal_response(raw)
+        assert sig is not None
+        self.assertEqual(sig.action, "NO_TRADE")
+
+    def test_parse_ai_response_prefers_nestal(self) -> None:
+        raw = """SHORT
+
+Entry:
+3500
+
+Take Profit:
+3400
+
+Stop Loss:
+3525
+
+Confidence:
+72%"""
+        sig = parse_ai_response(raw)
+        assert sig is not None
+        self.assertEqual(sig.action, "SHORT")
+
     def test_extract_json_direct(self) -> None:
         data = _extract_json('{"action": "NO_TRADE"}')
         self.assertEqual(data, {"action": "NO_TRADE"})
@@ -198,25 +189,23 @@ class TestAiAnalyzer(unittest.TestCase):
                 "entry": 3500.0,
                 "stop_loss": 3475.0,
                 "take_profit": 3550.0,
-                "reasoning": "LONG panel visible with TP and SL lines.",
+                "reasoning": "Bullish 5m structure with higher lows.",
             }
         )
         self.assertIsNotNone(sig)
         assert sig is not None
         self.assertEqual(sig.action, "LONG")
-        self.assertIn("LONG panel", sig.reasoning)
 
     def test_parse_no_trade_with_reasoning(self) -> None:
         sig = parse_trade_signal(
             {
                 "action": "NO_TRADE",
-                "reasoning": "No TP/SL panel visible on chart.",
+                "reasoning": "Choppy range, no clear bias.",
             }
         )
         self.assertIsNotNone(sig)
         assert sig is not None
         self.assertEqual(sig.action, "NO_TRADE")
-        self.assertIn("TP/SL", sig.reasoning)
 
     def test_parse_invalid_geometry(self) -> None:
         self.assertIsNone(
@@ -258,7 +247,7 @@ class TestRiskManager(unittest.TestCase):
             with patch.object(cfg, "RISK_STATE_PATH", risk_path):
                 rm = RiskManager()
                 rm.sync_balance(10_000.0)
-                allowed, _ = rm.can_trade(8_900.0)  # 11% daily loss
+                allowed, _ = rm.can_trade(8_900.0)
         self.assertFalse(allowed)
 
 
@@ -291,18 +280,32 @@ class TestHyperliquidPaper(unittest.TestCase):
 
 
 class TestConfig(unittest.TestCase):
-    def test_load_settings_candles_paper(self) -> None:
-        env = {"LIVE_TRADING": "false"}
+    def test_load_settings_requires_openai_and_chart(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"LIVE_TRADING": "false", "ARVOR_CONFIRM_LIVE_RISK": "false"},
+            clear=True,
+        ):
+            with self.assertRaises(ValueError):
+                load_settings()
+
+    def test_load_settings_defaults_live(self) -> None:
+        env = {
+            "OPENAI_API_KEY": "sk-" + "a" * 48,
+            "CHART_URL": "https://www.tradingview.com/chart/test/",
+            "HYPERLIQUID_PRIVATE_KEY": "0x" + "1" * 64,
+            "HYPERLIQUID_WALLET_ADDRESS": "0x" + "b" * 40,
+            "ARVOR_CONFIRM_LIVE_RISK": "true",
+        }
         with patch.dict(os.environ, env, clear=True):
             s = load_settings()
-        self.assertFalse(s.live_trading)
-        self.assertEqual(s.signal_mode, "candles")
+        self.assertTrue(s.live_trading)
+        self.assertFalse(s.is_paper)
 
-    def test_load_settings_screenshot_paper(self) -> None:
+    def test_load_settings_paper(self) -> None:
         env = {
-            "SIGNAL_MODE": "screenshot",
             "OPENAI_API_KEY": "sk-" + "a" * 48,
-            "TRADINGVIEW_CHART_URL": "https://www.tradingview.com/chart/test/",
+            "CHART_URL": "https://www.tradingview.com/chart/test/",
             "LIVE_TRADING": "false",
         }
         with patch.dict(os.environ, env, clear=True):
@@ -312,8 +315,8 @@ class TestConfig(unittest.TestCase):
 
     def test_live_requires_confirm(self) -> None:
         env = {
-            "SIGNAL_MODE": "webhook",
-            "TRADINGVIEW_WEBHOOK_SECRET": "x" * 24,
+            "OPENAI_API_KEY": "sk-" + "a" * 48,
+            "CHART_URL": "https://www.tradingview.com/chart/test/",
             "LIVE_TRADING": "true",
             "HYPERLIQUID_PRIVATE_KEY": "0x" + "1" * 64,
             "HYPERLIQUID_WALLET_ADDRESS": "0x" + "b" * 40,
@@ -366,7 +369,6 @@ class TestTradeExecutorCycle(unittest.TestCase):
 
                 fake_png = td_path / "screenshots" / "test.png"
                 fake_png.parent.mkdir(parents=True, exist_ok=True)
-                # Minimal valid PNG header
                 fake_png.write_bytes(
                     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
                     b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"

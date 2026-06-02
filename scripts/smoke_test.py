@@ -1,4 +1,4 @@
-"""Quick smoke test: imports, config, one paper trade cycle (mocked candles)."""
+"""Quick smoke test: imports, config, one paper trade cycle (mocked AI)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ sys.path.insert(0, str(BOT_ROOT))
 
 
 def main() -> int:
-    os.environ.setdefault("SIGNAL_MODE", "candles")
+    os.environ.setdefault("OPENAI_API_KEY", "sk-" + "a" * 48)
+    os.environ.setdefault("CHART_URL", "https://www.tradingview.com/chart/smoke/")
     os.environ.setdefault("LIVE_TRADING", "false")
 
     print("1. Loading settings...")
@@ -20,23 +21,9 @@ def main() -> int:
 
     settings = load_settings()
     assert settings.is_paper
-    assert settings.uses_candles
-    print("   OK — paper + candles mode")
+    print("   OK — paper + AI vision mode")
 
-    print("2. Fractal parser...")
-    from fractal_signals import Candle, evaluate_fractal_signal
-
-    candles = [
-        Candle(t=i * 300_000, open=3500 + i, high=3510 + i, low=3490 + i, close=3505 + i)
-        for i in range(30)
-    ]
-    sig = evaluate_fractal_signal(
-        candles, None, risk_reward=2.0, require_nested=False, last_signal_candle_t=None
-    )
-    assert sig is not None
-    print("   OK")
-
-    print("3. Paper client + risk...")
+    print("2. Paper client + risk...")
     from unittest.mock import patch
 
     from ai_analyzer import TradeSignal
@@ -56,7 +43,6 @@ def main() -> int:
             "RISK_STATE_PATH": td_path / "risk.json",
             "COOLDOWN_STATE_PATH": td_path / "cooldown.json",
             "JOURNAL_PATH": td_path / "journal.csv",
-            "FRACTAL_SIGNAL_STATE_PATH": td_path / "fractal_state.json",
         }
         ctx = [patch.object(cfg, name, path) for name, path in patches.items()]
         for p in ctx:
@@ -77,8 +63,8 @@ def main() -> int:
                 entry=3500.0,
                 stop_loss=3475.0,
                 take_profit=3550.0,
-                raw_response='{"signal_candle_t":1}',
-                reasoning="smoke test fractal",
+                raw_response="{}",
+                reasoning="smoke test",
             )
 
             with patch.object(client, "get_mid_price", return_value=3500.0):
