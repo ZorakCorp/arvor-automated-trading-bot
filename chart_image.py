@@ -41,6 +41,8 @@ def _parse_candles(raw: list[dict[str, Any]]) -> list[_Bar]:
 
 def _plot_candles(ax, bars: list[_Bar], title: str) -> None:
     """Simple candlestick panel (dark theme)."""
+    from matplotlib.patches import Rectangle
+
     if not bars:
         ax.set_title(f"{title} — no data")
         ax.set_facecolor("#0f0f1a")
@@ -84,7 +86,6 @@ def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from matplotlib.patches import Rectangle
     except ImportError:
         logger.error("matplotlib not installed — cannot render Hyperliquid chart")
         return False

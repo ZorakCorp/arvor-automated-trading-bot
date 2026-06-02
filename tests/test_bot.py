@@ -54,6 +54,34 @@ def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
     )
 
 
+class TestChartImage(unittest.TestCase):
+    def test_render_hyperliquid_chart(self) -> None:
+        import tempfile
+        from unittest.mock import MagicMock
+
+        from chart_image import render_hyperliquid_chart_image
+
+        def fake_candles(interval: str, limit: int) -> list[dict]:
+            return [
+                {
+                    "t": i * 300_000,
+                    "o": str(3500 + i),
+                    "h": str(3510 + i),
+                    "l": str(3490 + i),
+                    "c": str(3505 + i),
+                }
+                for i in range(30)
+            ]
+
+        client = MagicMock()
+        client.get_candles.side_effect = fake_candles
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "chart.png"
+            self.assertTrue(render_hyperliquid_chart_image(client, out))
+            self.assertGreater(out.stat().st_size, 1000)
+
+
 class TestChartUrl(unittest.TestCase):
     def test_placeholder_detection(self) -> None:
         self.assertTrue(is_placeholder_chart_url("https://www.tradingview.com/chart/.../"))
