@@ -391,22 +391,22 @@ def build_default_ai_prompt() -> str:
     """Full prompt sent with each chart screenshot."""
     return f"""You have received a screenshot of a live ETH chart from Hyperliquid.
 
-The image has THREE panels (live API data, top to bottom):
-1. TOP (largest) = ETH **5-MINUTE** — PRIMARY chart for entry, stop loss, and take profit
-2. MIDDLE = ETH **15-MINUTE** (meso trend)
-3. BOTTOM = ETH **1-HOUR** (macro trend)
+CHART DATA: **5-MINUTE candles only.** One chart panel — ETH 5m from Hyperliquid API.
+There is NO 15-minute or 1-hour chart in this image. Do not require separate meso/macro panels.
 
-Each panel title shows: interval, bar count, last closed candle time (UTC), price, and trend.
-The header line shows Nestal trend alignment across 5m / 15m / 1h.
+Use this 5m chart for everything:
+* Micro trend: last closed 5m close vs 10 candles ago (shown in chart title)
+* Pattern size, structure, entry, stop loss, take profit: from visible 5m price action only
+* Fractal fidelity: repeating structure visible on this 5m chart
 
-Ask yourself this one question using the chart — especially the TOP 5m panel:
+Ask yourself this one question using ONLY this 5m chart:
 
 "{SCREENSHOT_SELF_QUESTION}"
 
-Then apply the Nestal Fractal system below.
+Then apply the Nestal Fractal system below (5m data only — ignore meso/macro rules that need other timeframes).
 
 IMPORTANT: Example numbers in this prompt are FORMAT ONLY. Never copy example confidence
-or prices. Calculate confidence from the rules using what you see on the chart.
+or prices. Calculate confidence from the rules using what you see on the 5m chart.
 
 Follow the rule: Simple Question, Simple Answer. No commentary outside the required output format.
 

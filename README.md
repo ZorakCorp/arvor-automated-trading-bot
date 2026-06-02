@@ -25,7 +25,7 @@
 
 | Step | What happens |
 |------|----------------|
-| 1 | Builds a chart PNG: **Hyperliquid API** (5m/15m/1h) or optional `CHART_URL` screenshot |
+| 1 | Builds a **5-minute ETH-only** chart PNG from Hyperliquid API (or optional `CHART_URL` screenshot) |
 | 2 | OpenAI vision runs the **Nestal Fractal** brain (`nestal_prompt.py`) |
 | 3 | The model answers only: **LONG**, **SHORT**, or **NO TRADE** + entry / TP / SL / confidence % |
 | 4 | If confidence ≥ 65% and geometry is valid → **Hyperliquid** places the trade (live by default) |
@@ -98,7 +98,7 @@ cd arvor-automated-trading-bot
 CHART_SOURCE=hyperliquid
 ```
 
-No `CHART_URL` needed. The bot renders **ETH 5m + 15m + 1h** candle panels from Hyperliquid’s free API (matches Nestal micro/meso/macro).
+No `CHART_URL` needed. The bot renders **ETH 5m candles only** from Hyperliquid’s free API.
 
 **Optional** — TradingView screenshot:
 
