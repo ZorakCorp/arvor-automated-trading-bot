@@ -380,22 +380,33 @@ If conditions are weak:
 NO TRADE
 
 Confidence:
-58%
+[calculate from rules — do not copy any example number]
 
 Reason:
-Low fractal fidelity
+[one short reason under 10 words]
 """
 
 
 def build_default_ai_prompt() -> str:
     """Full prompt sent with each chart screenshot."""
-    return f"""You have received a screenshot of a live ETH chart.
+    return f"""You have received a screenshot of a live ETH chart from Hyperliquid.
 
-Ask yourself this one question using ONLY the chart image:
+The image has THREE panels (live API data, top to bottom):
+1. TOP (largest) = ETH **5-MINUTE** — PRIMARY chart for entry, stop loss, and take profit
+2. MIDDLE = ETH **15-MINUTE** (meso trend)
+3. BOTTOM = ETH **1-HOUR** (macro trend)
+
+Each panel title shows: interval, bar count, last closed candle time (UTC), price, and trend.
+The header line shows Nestal trend alignment across 5m / 15m / 1h.
+
+Ask yourself this one question using the chart — especially the TOP 5m panel:
 
 "{SCREENSHOT_SELF_QUESTION}"
 
 Then apply the Nestal Fractal system below.
+
+IMPORTANT: Example numbers in this prompt are FORMAT ONLY. Never copy example confidence
+or prices. Calculate confidence from the rules using what you see on the chart.
 
 Follow the rule: Simple Question, Simple Answer. No commentary outside the required output format.
 

@@ -10,6 +10,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Nestal lookbacks per timeframe (closed candles only)
+_TREND_LOOKBACK = {"5m": 10, "15m": 5, "1h": 3}
+
 
 @dataclass(frozen=True)
 class _Bar:
@@ -18,6 +21,14 @@ class _Bar:
     high: float
     low: float
     close: float
+
+
+@dataclass(frozen=True)
+class _PanelData:
+    interval: str
+    bars: list[_Bar]
+    trend: str
+    lookback: int
 
 
 def _parse_candles(raw: list[dict[str, Any]]) -> list[_Bar]:
@@ -39,23 +50,46 @@ def _parse_candles(raw: list[dict[str, Any]]) -> list[_Bar]:
     return bars
 
 
-def _plot_candles(ax, bars: list[_Bar], title: str) -> None:
+def _closed_bars(bars: list[_Bar]) -> list[_Bar]:
+    """Drop the forming (last) candle so trends use completed bars only."""
+    return bars[:-1] if len(bars) > 1 else bars
+
+
+def _trend_label(bars: list[_Bar], lookback: int) -> str:
+    closed = _closed_bars(bars)
+    if len(closed) < lookback + 1:
+        return "N/A"
+    return "Bullish" if closed[-1].close > closed[-1 - lookback].close else "Bearish"
+
+
+def _format_bar_time(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _plot_candles(ax, panel: _PanelData, *, primary: bool = False) -> None:
     """Simple candlestick panel (dark theme)."""
     from matplotlib.patches import Rectangle
 
+    bars = panel.bars
+    interval = panel.interval
+    trend = panel.trend
+    lookback = panel.lookback
+
     if not bars:
-        ax.set_title(f"{title} — no data")
+        ax.set_title(f"ETH {interval} — NO DATA", color="#ff6666")
         ax.set_facecolor("#0f0f1a")
         return
 
-    xs = list(range(len(bars)))
+    closed = _closed_bars(bars)
+    last_closed = closed[-1] if closed else bars[-1]
+
     ax.set_facecolor("#0f0f1a")
     ax.tick_params(colors="#aaaaaa")
     ax.title.set_color("#eeeeee")
 
     for i, b in enumerate(bars):
         color = "#26a69a" if b.close >= b.open else "#ef5350"
-        ax.plot([i, i], [b.low, b.high], color=color, linewidth=1)
+        ax.plot([i, i], [b.low, b.high], color=color, linewidth=1.2 if primary else 1)
         body_low = min(b.open, b.close)
         body_high = max(b.open, b.close)
         ax.add_patch(
@@ -68,9 +102,17 @@ def _plot_candles(ax, bars: list[_Bar], title: str) -> None:
             )
         )
 
-    last = bars[-1].close
-    ax.axhline(last, color="#ffd700", linestyle="--", linewidth=0.8, alpha=0.7)
-    ax.set_title(f"{title}  |  last ${last:,.2f}", fontsize=11, pad=6)
+    ax.axhline(last_closed.close, color="#ffd700", linestyle="--", linewidth=0.9, alpha=0.8)
+
+    primary_tag = "PRIMARY ENTRY TF" if primary else ""
+    title = (
+        f"ETH {interval} | {len(bars)} bars | last closed {_format_bar_time(last_closed.t)} "
+        f"| ${last_closed.close:,.2f} | trend({lookback} bars): {trend}"
+    )
+    if primary_tag:
+        title = f"{primary_tag} — {title}"
+    ax.set_title(title, fontsize=12 if primary else 10, pad=8 if primary else 6, fontweight="bold" if primary else "normal")
+
     ax.set_xlim(-1, len(bars))
     ax.grid(True, alpha=0.15, color="#444444")
     ax.set_xticks([])
@@ -78,8 +120,8 @@ def _plot_candles(ax, bars: list[_Bar], title: str) -> None:
 
 def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
     """
-    Build a 3-panel PNG: ETH 5m (micro), 15m (meso), 1h (macro) from Hyperliquid API.
-    Works from Railway without TradingView.
+    Build a 3-panel PNG: ETH 5m (primary), 15m, 1h from Hyperliquid API.
+    Top panel is enlarged — 5m is the trade entry timeframe.
     """
     try:
         import matplotlib
@@ -90,32 +132,66 @@ def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
         logger.error("matplotlib not installed — cannot render Hyperliquid chart")
         return False
 
-    panels = (
-        ("5m", 120, "ETH 5m — Micro trend"),
-        ("15m", 80, "ETH 15m — Meso trend"),
-        ("1h", 48, "ETH 1h — Macro trend"),
+    panel_specs = (
+        ("5m", 150, True),
+        ("15m", 80, False),
+        ("1h", 48, False),
     )
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 10), facecolor="#1a1a2e")
-    fig.suptitle(
-        "Hyperliquid ETH — Nestal Fractal chart (live API)",
-        color="#eeeeee",
-        fontsize=13,
-        y=0.98,
-    )
-
-    for ax, (interval, limit, title) in zip(axes, panels, strict=True):
+    panels: list[_PanelData] = []
+    for interval, limit, _ in panel_specs:
+        lookback = _TREND_LOOKBACK[interval]
         try:
             raw = client.get_candles(interval, limit)
             bars = _parse_candles(raw)
+            trend = _trend_label(bars, lookback)
         except Exception as exc:
             logger.warning("Candle fetch failed for %s: %s", interval, exc)
             bars = []
-        _plot_candles(ax, bars, title)
+            trend = "N/A"
 
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+        panels.append(_PanelData(interval=interval, bars=bars, trend=trend, lookback=lookback))
+        if bars:
+            closed = _closed_bars(bars)
+            last = closed[-1] if closed else bars[-1]
+            logger.info(
+                "Chart candles %s: %d bars | last closed %s @ $%.2f | trend(%d)=%s",
+                interval,
+                len(bars),
+                _format_bar_time(last.t),
+                last.close,
+                lookback,
+                trend,
+            )
+        else:
+            logger.warning("Chart candles %s: no bars returned", interval)
+
+    micro, meso, macro = (p.trend for p in panels)
+    if micro != "N/A" and meso != "N/A" and macro != "N/A":
+        aligned = (micro == meso == macro)
+        alignment = f"ALIGNED {micro.upper()}" if aligned else f"NOT ALIGNED (5m={micro}, 15m={meso}, 1h={macro})"
+    else:
+        alignment = "INSUFFICIENT DATA"
+
+    fig = plt.figure(figsize=(14, 11), facecolor="#1a1a2e")
+    # 5m panel gets ~45% height — primary entry chart
+    gs = fig.add_gridspec(3, 1, height_ratios=[2.2, 1.2, 1.2], hspace=0.28)
+    axes = [fig.add_subplot(gs[i]) for i in range(3)]
+
+    fig.suptitle(
+        "Hyperliquid ETH live — TOP panel is 5-MINUTE (entry timeframe)\n"
+        f"Nestal trends: 5m={micro} | 15m={meso} | 1h={macro} | {alignment}",
+        color="#eeeeee",
+        fontsize=12,
+        y=0.98,
+    )
+
+    for ax, panel, (_, _, is_primary) in zip(axes, panels, panel_specs, strict=True):
+        _plot_candles(ax, panel, primary=is_primary)
+
+    fig.subplots_adjust(top=0.90)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=120, facecolor=fig.get_facecolor())
+    fig.savefig(output_path, dpi=130, facecolor=fig.get_facecolor())
     plt.close(fig)
 
     if not output_path.exists() or output_path.stat().st_size < 1000:
@@ -123,8 +199,9 @@ def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
         return False
 
     logger.info(
-        "Hyperliquid chart rendered: %s (%d bytes)",
+        "Hyperliquid chart rendered (5m primary): %s (%d bytes) | %s",
         output_path,
         output_path.stat().st_size,
+        alignment,
     )
     return True
