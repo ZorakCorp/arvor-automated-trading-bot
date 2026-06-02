@@ -161,7 +161,7 @@ Legacy aliases still work: `TRADINGVIEW_CHART_URL`, `TRADINGVIEW_STORAGE_STATE_P
 
 | Setting | Value |
 |---------|--------|
-| Leverage | 5× |
+| Leverage | 15× |
 | Risk per trade | 50% of available balance (sized from SL distance) |
 | Cooldown | 30 minutes after a closed trade |
 | Loss limits | Daily / weekly / monthly caps in `risk_manager.py` |
