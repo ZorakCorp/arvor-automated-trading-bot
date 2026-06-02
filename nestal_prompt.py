@@ -395,7 +395,9 @@ Ask yourself this one question using ONLY the chart image:
 
 "{SCREENSHOT_SELF_QUESTION}"
 
-Then apply the Nestal Fractal system below. Do not add commentary outside the required output format.
+Then apply the Nestal Fractal system below.
+
+Follow the rule: Simple Question, Simple Answer. No commentary outside the required output format.
 
 {NESTAL_FRACTAL_SYSTEM.strip()}
 """
