@@ -43,7 +43,7 @@ Default instructions live in `nestal_prompt.py`. The model:
 - Scores **fractal fidelity** (min 70% to trade)  
 - Computes **confidence** (min 65% to trade; bot rejects lower values)  
 - Uses **pattern size** for SL (1×) and TP (2×) → **2:1** risk/reward  
-- Asks itself: **"Would you long or short here?"** on every screenshot  
+- Asks itself: **"Would you long or short here?"** on every screenshot (**Simple Question, Simple Answer** — no essays in the reply)  
 
 Override the full prompt with `AI_PROMPT` in environment variables.
 
