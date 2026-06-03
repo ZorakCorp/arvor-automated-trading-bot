@@ -216,7 +216,7 @@ class TradeExecutor:
                 entry_price=signal.entry,
                 stop_loss=signal.stop_loss,
                 take_profit=signal.take_profit,
-                use_limit=False,
+                use_limit=True,
             )
         except Exception as exc:
             safe = redact_for_log(str(exc))

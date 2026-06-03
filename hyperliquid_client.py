@@ -476,15 +476,53 @@ class HyperliquidClient:
             raise RuntimeError("Cannot open position: one already open")
 
         entry_result: dict[str, Any] | None = None
+        filled_size = size
         try:
+            sl_px = self._round_price(stop_loss)
+            tp_px = self._round_price(take_profit)
+
             if use_limit:
+                entry_px = self._round_price(entry_price)
+                logger.info(
+                    "Placing LIMIT entry at AI price $%.2f (SL $%.2f | TP $%.2f)",
+                    entry_px,
+                    sl_px,
+                    tp_px,
+                )
                 entry_result = self._exchange.order(
                     COIN,
                     is_buy,
                     size,
-                    entry_price,
+                    entry_px,
                     {"limit": {"tif": "Gtc"}},
                     reduce_only=False,
+                )
+                if not self._order_ok(entry_result):
+                    raise RuntimeError(
+                        f"Limit entry order failed: {redact_for_log(str(entry_result))}"
+                    )
+                fill = self._extract_fill(entry_result)
+                if fill is None:
+                    oid = self._extract_resting_oid(entry_result)
+                    if oid is not None:
+                        try:
+                            self._exchange.cancel(COIN, oid)
+                            logger.info("Cancelled unfilled limit entry oid=%s", oid)
+                        except Exception as cancel_exc:
+                            logger.warning(
+                                "Could not cancel resting limit: %s",
+                                redact_for_log(str(cancel_exc)),
+                            )
+                    raise RuntimeError(
+                        f"Limit entry not filled at AI price ${entry_px:.2f}"
+                    )
+                filled_size, avg_entry = fill
+                filled_size = self.round_size(filled_size)
+                entry_price = float(avg_entry)
+                logger.info(
+                    "Limit entry filled: size=%.4f ETH @ $%.2f",
+                    filled_size,
+                    entry_price,
                 )
             else:
                 entry_result = self._exchange.market_open(
@@ -493,19 +531,18 @@ class HyperliquidClient:
                     sz=size,
                     slippage=0.01,
                 )
+                if not self._order_ok(entry_result):
+                    raise RuntimeError(
+                        f"Entry order failed: {redact_for_log(str(entry_result))}"
+                    )
 
-            if not self._order_ok(entry_result):
-                raise RuntimeError(
-                    f"Entry order failed: {redact_for_log(str(entry_result))}"
-                )
-
-            sl_result = self._place_trigger(is_buy, size, stop_loss, tpsl="sl")
+            sl_result = self._place_trigger(is_buy, filled_size, sl_px, tpsl="sl")
             if not self._order_ok(sl_result):
                 raise RuntimeError(
                     f"Stop loss order failed: {redact_for_log(str(sl_result))}"
                 )
 
-            tp_result = self._place_trigger(is_buy, size, take_profit, tpsl="tp")
+            tp_result = self._place_trigger(is_buy, filled_size, tp_px, tpsl="tp")
             if not self._order_ok(tp_result):
                 raise RuntimeError(
                     f"Take profit order failed: {redact_for_log(str(tp_result))}"
@@ -514,10 +551,10 @@ class HyperliquidClient:
             pos = Position(
                 coin=COIN,
                 side="LONG" if is_buy else "SHORT",
-                size=size,
+                size=filled_size,
                 entry_price=entry_price,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
+                stop_loss=sl_px,
+                take_profit=tp_px,
                 opened_at=datetime.now(timezone.utc).isoformat(),
             )
             self._save_live_position_meta(pos)
@@ -529,9 +566,19 @@ class HyperliquidClient:
             }
         except Exception as exc:
             logger.error("Order placement failed: %s", redact_for_log(str(exc)))
-            if entry_result is not None and self._order_ok(entry_result):
-                logger.error("Rolling back: closing unprotected entry position")
-                self._emergency_close(size)
+            if entry_result is not None:
+                fill = self._extract_fill(entry_result)
+                if fill is not None:
+                    rollback_size = self.round_size(fill[0])
+                    logger.error("Rolling back: closing unprotected entry position")
+                    self._emergency_close(rollback_size)
+                else:
+                    oid = self._extract_resting_oid(entry_result)
+                    if oid is not None:
+                        try:
+                            self._exchange.cancel(COIN, oid)
+                        except Exception:
+                            pass
             raise
 
     def _emergency_close(self, size: float) -> None:
@@ -572,6 +619,36 @@ class HyperliquidClient:
             },
             reduce_only=True,
         )
+
+    @staticmethod
+    def _order_statuses(result: Any) -> list[dict[str, Any]]:
+        if not isinstance(result, dict):
+            return []
+        response = result.get("response") or {}
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, dict):
+            return []
+        statuses = data.get("statuses")
+        if not isinstance(statuses, list):
+            return []
+        return [s for s in statuses if isinstance(s, dict)]
+
+    @staticmethod
+    def _extract_fill(result: Any) -> tuple[float, float] | None:
+        """Return (filled_size, avg_price) if the order filled."""
+        for item in HyperliquidClient._order_statuses(result):
+            filled = item.get("filled")
+            if isinstance(filled, dict):
+                return float(filled["totalSz"]), float(filled["avgPx"])
+        return None
+
+    @staticmethod
+    def _extract_resting_oid(result: Any) -> int | None:
+        for item in HyperliquidClient._order_statuses(result):
+            resting = item.get("resting")
+            if isinstance(resting, dict) and resting.get("oid") is not None:
+                return int(resting["oid"])
+        return None
 
     @staticmethod
     def _order_ok(result: Any) -> bool:
