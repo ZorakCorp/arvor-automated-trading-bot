@@ -64,6 +64,8 @@ def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
     try:
         import matplotlib
 
+        logging.getLogger("matplotlib").setLevel(logging.WARNING)
+        logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from matplotlib.patches import Rectangle
