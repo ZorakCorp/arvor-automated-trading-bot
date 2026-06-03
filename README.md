@@ -4,7 +4,7 @@
 
 ### Hyperliquid ETH Bot · Nestal Fractal · OpenAI Vision
 
-**Live by default:** every ~60s the bot screenshots your ETH chart, asks OpenAI *"Would you long or short here?"*, and executes on Hyperliquid when Nestal rules pass.
+**Live by default:** on each **5-minute UTC candle close** the bot screenshots your ETH chart, asks OpenAI *"Would you long or short here?"*, and executes on Hyperliquid when Nestal rules pass.
 
 <br/>
 
@@ -129,7 +129,7 @@ SCREENSHOT_WAIT_MS=18000
 ```
 Hyperliquid ETH Bot starting — mode: LIVE | signals: AI vision
 LIVE TRADING ENABLED — real funds at risk
-Chart scan every 60s → OpenAI (GPT-5.2) → Hyperliquid execution
+Chart scan every 5m on UTC candle close → OpenAI (GPT-5.2) → Hyperliquid execution
 Cycle 1 — running...
 Screenshot saved: ...
 OpenAI vision request (model=gpt-5.2)
@@ -189,7 +189,7 @@ No Hyperliquid keys required. Paper balance defaults to $10,000 (`PAPER_STARTING
 ## Project layout
 
 ```
-├── main.py              # 60s loop
+├── main.py              # 5m aligned scan loop
 ├── nestal_prompt.py     # Nestal Fractal AI instructions
 ├── nestal_score.py      # Computed fidelity/confidence from 5m candles
 ├── ai_analyzer.py       # OpenAI vision + response parser

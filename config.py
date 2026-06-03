@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -37,7 +39,9 @@ DAILY_MAX_LOSS_FRACTION = 0.10
 WEEKLY_MAX_LOSS_FRACTION = 0.70
 MONTHLY_MAX_LOSS_FRACTION = 0.70
 COOLDOWN_MINUTES = 30
-LOOP_INTERVAL_SECONDS = 60
+# Align scans to UTC 5m candle closes (:00, :05, :10, …) + buffer for exchange finalize
+CANDLE_CLOSE_BUFFER_SECONDS = 3
+LOOP_INTERVAL_SECONDS = TIMEFRAME_MINUTES * 60
 
 # Hyperliquid ETH size precision (sz decimals)
 ETH_SIZE_DECIMALS = 4
@@ -58,6 +62,31 @@ def is_placeholder_chart_url(url: str) -> bool:
     if lower.rstrip("/").endswith("tradingview.com/chart"):
         return True
     return False
+
+
+def seconds_until_next_candle_scan(
+    interval_minutes: int = TIMEFRAME_MINUTES,
+    buffer_seconds: float = CANDLE_CLOSE_BUFFER_SECONDS,
+) -> float:
+    """Seconds until the next UTC wall-clock candle boundary (+ buffer).
+
+    Scans fire at :00, :05, :10, … UTC plus a short buffer so the closed 5m bar
+    is available from Hyperliquid before chart capture.
+    """
+    interval = interval_minutes * 60
+    elapsed = time.time() % interval
+    if elapsed < buffer_seconds:
+        return buffer_seconds - elapsed
+    return interval - elapsed + buffer_seconds
+
+
+def next_candle_scan_utc(
+    interval_minutes: int = TIMEFRAME_MINUTES,
+    buffer_seconds: float = CANDLE_CLOSE_BUFFER_SECONDS,
+) -> datetime:
+    """UTC timestamp of the next aligned chart scan."""
+    wait = seconds_until_next_candle_scan(interval_minutes, buffer_seconds)
+    return datetime.now(timezone.utc) + timedelta(seconds=wait)
 
 
 @dataclass(frozen=True)

@@ -217,12 +217,7 @@ def apply_nestal_score(signal: TradeSignal, score: NestalScore) -> TradeSignal:
             )
 
     if signal.action not in ("LONG", "SHORT"):
-        return TradeSignal(
-            action=signal.action,
-            confidence=computed,
-            reasoning=signal.reasoning,
-            raw_response=signal.raw_response,
-        )
+        return replace(signal, confidence=computed)
 
     blockers: list[str] = []
     if signal.action == "LONG" and score.micro_trend != "Bullish":
@@ -237,22 +232,35 @@ def apply_nestal_score(signal: TradeSignal, score: NestalScore) -> TradeSignal:
     if blockers:
         reason = "; ".join(blockers)
         logger.warning("Nestal gate blocked %s — %s", signal.action, reason)
-        return TradeSignal(
+        return replace(
+            signal,
             action="NO_TRADE",
             confidence=computed,
             reasoning=reason,
-            raw_response=signal.raw_response,
+            entry=None,
+            stop_loss=None,
+            take_profit=None,
         )
 
-    return TradeSignal(
-        action=signal.action,
-        entry=signal.entry,
-        stop_loss=signal.stop_loss,
-        take_profit=signal.take_profit,
-        confidence=computed,
-        reasoning=signal.reasoning,
-        raw_response=signal.raw_response,
-    )
+    return replace(signal, confidence=computed)
+
+
+def log_raw_ai_signal(signal: TradeSignal) -> None:
+    """Log the model's raw direction/prices before Nestal gates."""
+    model_label = signal.model_used or "unknown"
+    if signal.action in ("LONG", "SHORT"):
+        logger.info(
+            "AI raw signal: %s (model=%s) entry=%s tp=%s sl=%s",
+            signal.action,
+            model_label,
+            signal.entry,
+            signal.take_profit,
+            signal.stop_loss,
+        )
+    else:
+        logger.info("AI raw signal: %s (model=%s)", signal.action, model_label)
+        if signal.reasoning:
+            logger.info("AI raw reason: %s", signal.reasoning)
 
 
 def _chat_completion_kwargs(model: str) -> dict[str, Any]:
@@ -339,9 +347,9 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
 
 
 def log_signal_decision(signal: TradeSignal) -> None:
-    """Log AI decision (minimal — no trade reasoning unless NO_TRADE)."""
+    """Log final decision after Nestal gates."""
     model_label = signal.model_used or "unknown"
-    logger.info("AI decision: %s (model=%s)", signal.action, model_label)
+    logger.info("Final decision: %s (model=%s)", signal.action, model_label)
     if signal.confidence is not None:
         logger.info("Computed confidence: %.1f%%", signal.confidence)
     if signal.action == "NO_TRADE" and signal.reasoning:

@@ -13,6 +13,8 @@ from unittest.mock import patch
 BOT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BOT_ROOT))
 
+from dataclasses import replace
+
 from ai_analyzer import (
     _extract_json,
     apply_nestal_score,
@@ -21,7 +23,7 @@ from ai_analyzer import (
     parse_trade_signal,
 )
 from nestal_score import Bar, NestalScore, compute_nestal_score
-from config import Settings, load_settings
+from config import Settings, load_settings, seconds_until_next_candle_scan
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
 from risk_manager import RiskManager
@@ -211,6 +213,7 @@ Stop Loss:
 3450"""
         )
         assert sig is not None
+        sig = replace(sig, model_used="gpt-5.2-2025-12-11")
         score = NestalScore(
             micro_trend="Bullish",
             fractal_fidelity=55.0,
@@ -221,6 +224,7 @@ Stop Loss:
         gated = apply_nestal_score(sig, score)
         self.assertEqual(gated.action, "NO_TRADE")
         self.assertIn("fidelity", gated.reasoning.lower())
+        self.assertEqual(gated.model_used, "gpt-5.2-2025-12-11")
 
     def test_apply_nestal_score_ignores_canned_ai_confidence(self) -> None:
         raw = """SHORT
@@ -406,6 +410,19 @@ class TestConfig(unittest.TestCase):
             s = load_settings()
         self.assertTrue(s.live_trading)
         self.assertFalse(s.is_paper)
+
+    def test_seconds_until_next_candle_scan(self) -> None:
+        with patch("config.time.time", return_value=1_700_000_000.0):
+            wait = seconds_until_next_candle_scan(interval_minutes=5, buffer_seconds=3)
+        self.assertGreater(wait, 0)
+        self.assertLessEqual(wait, 300 + 3)
+
+        # Exactly on a 5m boundary → scan after buffer
+        with patch("config.time.time", return_value=1_700_000_100.0):
+            self.assertEqual(
+                seconds_until_next_candle_scan(interval_minutes=5, buffer_seconds=3),
+                3.0,
+            )
 
     def test_load_settings_paper_without_chart_url(self) -> None:
         env = {

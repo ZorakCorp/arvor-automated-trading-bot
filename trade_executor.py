@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ai_analyzer import TradeSignal, analyze_chart, apply_nestal_score, log_signal_decision
+from ai_analyzer import TradeSignal, analyze_chart, apply_nestal_score, log_raw_ai_signal, log_signal_decision
 from config import LEVERAGE, Settings
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
@@ -147,6 +147,7 @@ class TradeExecutor:
             self.risk.record_outcome("no_trade")
             return
 
+        log_raw_ai_signal(signal)
         signal = apply_nestal_score(signal, nestal_score)
         log_signal_decision(signal)
 

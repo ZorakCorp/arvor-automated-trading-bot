@@ -11,7 +11,14 @@ import signal
 import sys
 import time
 
-from config import LOOP_INTERVAL_SECONDS, ensure_data_dirs, load_settings
+from config import (
+    CANDLE_CLOSE_BUFFER_SECONDS,
+    TIMEFRAME_MINUTES,
+    ensure_data_dirs,
+    load_settings,
+    next_candle_scan_utc,
+    seconds_until_next_candle_scan,
+)
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
 from risk_manager import RiskManager
@@ -34,6 +41,27 @@ def _handle_shutdown(signum: int, frame) -> None:  # noqa: ARG001
     global _running
     logging.getLogger(__name__).info("Shutdown signal received (%s)", signum)
     _running = False
+
+
+def _sleep_interruptible(seconds: float) -> None:
+    """Sleep in 1s slices so SIGINT/SIGTERM can stop promptly."""
+    end = time.time() + seconds
+    while _running and time.time() < end:
+        time.sleep(min(1.0, end - time.time()))
+
+
+def _wait_for_next_candle_scan(log: logging.Logger, label: str) -> None:
+    wait = seconds_until_next_candle_scan()
+    next_scan = next_candle_scan_utc()
+    log.info(
+        "%s — next scan at %s UTC (in %.0fs, %dm candle + %ds buffer)",
+        label,
+        next_scan.strftime("%Y-%m-%d %H:%M:%S"),
+        wait,
+        TIMEFRAME_MINUTES,
+        CANDLE_CLOSE_BUFFER_SECONDS,
+    )
+    _sleep_interruptible(wait)
 
 
 def main() -> None:
@@ -60,8 +88,8 @@ def main() -> None:
     else:
         log.info("Paper mode (LIVE_TRADING=false)")
     log.info(
-        "Chart scan every %ss (%s) → OpenAI (%s) → Hyperliquid execution",
-        LOOP_INTERVAL_SECONDS,
+        "Chart scan every %dm on UTC candle close (%s) → OpenAI (%s) → Hyperliquid",
+        TIMEFRAME_MINUTES,
         settings.chart_source,
         settings.openai_model,
     )
@@ -87,6 +115,8 @@ def main() -> None:
         if settings.live_trading:
             sys.exit(1)
 
+    _wait_for_next_candle_scan(log, "Startup")
+
     cycle_num = 0
     while _running:
         cycle_num += 1
@@ -99,11 +129,7 @@ def main() -> None:
         if not _running:
             break
 
-        log.info("Cycle %d complete — next scan in %ss", cycle_num, LOOP_INTERVAL_SECONDS)
-        for _ in range(LOOP_INTERVAL_SECONDS):
-            if not _running:
-                break
-            time.sleep(1)
+        _wait_for_next_candle_scan(log, f"Cycle {cycle_num} complete")
 
     log.info("Bot stopped.")
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -161,14 +162,22 @@ def fetch_nestal_score(client: Any) -> NestalScore | None:
         logger.error("Nestal score: no bars returned")
         return None
 
+    closed = closed_bars(bars)
+    last_bar = closed[-1] if closed else bars[-1]
+    last_bar_utc = datetime.fromtimestamp(last_bar.t / 1000, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M UTC"
+    )
+
     logger.info(
         "Nestal score (computed): micro=%s fidelity=%.1f%% confidence(LONG)=%.1f%% "
-        "confidence(SHORT)=%.1f%% pattern_size=$%.2f last=$%.2f",
+        "confidence(SHORT)=%.1f%% pattern_size=$%.2f last=$%.2f last_bar=%s "
+        "(scores repeat until next 5m close)",
         score.micro_trend,
         score.fractal_fidelity,
         score.confidence_for("LONG"),
         score.confidence_for("SHORT"),
         score.pattern_size,
         score.last_close,
+        last_bar_utc,
     )
     return score
