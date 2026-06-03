@@ -474,6 +474,8 @@ class HyperliquidClient:
 
         if self.has_open_position():
             raise RuntimeError("Cannot open position: one already open")
+        if self.has_pending_entry_order():
+            raise RuntimeError("Cannot open position: pending entry order already resting")
 
         entry_result: dict[str, Any] | None = None
         filled_size = size
@@ -811,6 +813,33 @@ class HyperliquidClient:
             return self._paper_position is not None
         account = self.get_account()
         return account.position is not None
+
+    def has_pending_entry_order(self) -> bool:
+        """True if a non-reduce-only ETH order is resting (e.g. unfilled limit entry)."""
+        if self.settings.is_paper or self._info is None:
+            return False
+        try:
+            orders = self._info.open_orders(self._wallet_address)
+        except Exception as exc:
+            logger.warning("Could not fetch open orders: %s", exc)
+            return False
+        for order in orders:
+            if order.get("coin") != COIN:
+                continue
+            if order.get("reduceOnly") or order.get("reduce_only"):
+                continue
+            return True
+        return False
+
+    def blocks_new_trade(self) -> tuple[bool, str]:
+        """True when bot must not open another trade or call OpenAI for entries."""
+        if self.has_open_position():
+            account = self.get_account()
+            side = account.position.side if account.position else "?"
+            return True, f"position open ({side})"
+        if self.has_pending_entry_order():
+            return True, "pending limit entry order on ETH"
+        return False, ""
 
     def round_size(self, size: float) -> float:
         """Round size to exchange precision."""

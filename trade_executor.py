@@ -64,8 +64,9 @@ class TradeExecutor:
             account = self.client.get_account()
             self.risk.sync_balance(account.balance_usd)
 
-        if account.position is not None:
-            logger.info("Position open (%s) — monitoring only", account.position.side)
+        blocked, block_reason = self.client.blocks_new_trade()
+        if blocked:
+            logger.info("No new trades — %s (monitoring only)", block_reason)
             return
 
         if self.cooldown.is_active():
