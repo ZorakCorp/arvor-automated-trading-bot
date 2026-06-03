@@ -546,18 +546,26 @@ class HyperliquidClient:
             )
         self._clear_live_position_meta()
 
+    def _round_price(self, px: float) -> float:
+        """Round to Hyperliquid perp tick size (SDK-compatible)."""
+        if self._exchange is None:
+            return float(px)
+        return float(self._exchange._slippage_price(COIN, float(px), True, 0.0))
+
     def _place_trigger(
         self, was_buy: bool, size: float, trigger_px: float, tpsl: str
     ) -> dict:
         is_buy = not was_buy
+        px = self._round_price(trigger_px)
+        sz = float(size)
         return self._exchange.order(
             COIN,
             is_buy,
-            size,
-            trigger_px,
+            sz,
+            px,
             {
                 "trigger": {
-                    "triggerPx": str(trigger_px),
+                    "triggerPx": px,
                     "isMarket": True,
                     "tpsl": tpsl,
                 }
