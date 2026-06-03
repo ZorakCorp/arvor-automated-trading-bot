@@ -15,10 +15,12 @@ sys.path.insert(0, str(BOT_ROOT))
 
 from ai_analyzer import (
     _extract_json,
+    apply_nestal_score,
     parse_ai_response,
     parse_nestal_response,
     parse_trade_signal,
 )
+from nestal_score import Bar, NestalScore, compute_nestal_score
 from config import Settings, load_settings
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
@@ -44,7 +46,7 @@ def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
         ai_prompt="test prompt",
         live_trading=False,
         hyperliquid_testnet=False,
-        openai_model="gpt-4o",
+        openai_model="gpt-5.2",
         paper_starting_balance=balance,
         log_level="ERROR",
         screenshot_wait_ms=8000,
@@ -176,7 +178,7 @@ Low fractal fidelity"""
         self.assertEqual(sig.confidence, 58.0)
         self.assertIn("fractal", sig.reasoning.lower())
 
-    def test_parse_nestal_low_confidence_becomes_no_trade(self) -> None:
+    def test_parse_nestal_low_confidence_still_parses_long(self) -> None:
         raw = """LONG
 
 Entry:
@@ -192,7 +194,71 @@ Confidence:
 60%"""
         sig = parse_nestal_response(raw)
         assert sig is not None
-        self.assertEqual(sig.action, "NO_TRADE")
+        self.assertEqual(sig.action, "LONG")
+        self.assertEqual(sig.confidence, 60.0)
+
+    def test_apply_nestal_score_blocks_low_fidelity(self) -> None:
+        sig = parse_nestal_response(
+            """LONG
+
+Entry:
+3500
+
+Take Profit:
+3600
+
+Stop Loss:
+3450"""
+        )
+        assert sig is not None
+        score = NestalScore(
+            micro_trend="Bullish",
+            fractal_fidelity=55.0,
+            pattern_size=25.0,
+            last_close=3500.0,
+            bar_count=100,
+        )
+        gated = apply_nestal_score(sig, score)
+        self.assertEqual(gated.action, "NO_TRADE")
+        self.assertIn("fidelity", gated.reasoning.lower())
+
+    def test_apply_nestal_score_ignores_canned_ai_confidence(self) -> None:
+        raw = """SHORT
+
+Entry:
+3500
+
+Take Profit:
+3400
+
+Stop Loss:
+3525
+
+Confidence:
+60%"""
+        sig = parse_nestal_response(raw)
+        assert sig is not None
+        score = NestalScore(
+            micro_trend="Bearish",
+            fractal_fidelity=85.0,
+            pattern_size=20.0,
+            last_close=3500.0,
+            bar_count=100,
+        )
+        gated = apply_nestal_score(sig, score)
+        self.assertEqual(gated.action, "SHORT")
+        self.assertGreaterEqual(gated.confidence or 0, 65.0)
+        self.assertNotEqual(gated.confidence, 60.0)
+
+    def test_compute_nestal_score_bullish_trend(self) -> None:
+        bars = [
+            Bar(t=i * 300_000, open=3500 + i, high=3510 + i, low=3490 + i, close=3505 + i)
+            for i in range(50)
+        ]
+        score = compute_nestal_score(bars)
+        assert score is not None
+        self.assertEqual(score.micro_trend, "Bullish")
+        self.assertGreater(score.confidence_for("LONG"), score.confidence_for("SHORT"))
 
     def test_parse_ai_response_prefers_nestal(self) -> None:
         raw = """SHORT
@@ -431,6 +497,16 @@ class TestTradeExecutorCycle(unittest.TestCase):
                     patch(
                         "trade_executor.capture_chart_screenshot",
                         return_value=fake_png,
+                    ),
+                    patch(
+                        "trade_executor.fetch_nestal_score",
+                        return_value=NestalScore(
+                            micro_trend="Bullish",
+                            fractal_fidelity=80.0,
+                            pattern_size=20.0,
+                            last_close=3500.0,
+                            bar_count=100,
+                        ),
                     ),
                     patch(
                         "trade_executor.analyze_chart",

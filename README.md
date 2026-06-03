@@ -10,7 +10,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![Hyperliquid](https://img.shields.io/badge/Exchange-Hyperliquid-00D395?style=for-the-badge)](https://hyperliquid.xyz/)
-[![OpenAI](https://img.shields.io/badge/Vision-GPT--4o-412991?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com/)
+[![OpenAI](https://img.shields.io/badge/Vision-GPT--5.2-412991?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com/)
 [![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)](https://railway.app/)
 
 <br/>
@@ -27,11 +27,11 @@
 |------|----------------|
 | 1 | Builds a **5-minute ETH-only** chart PNG from Hyperliquid API (or optional `CHART_URL` screenshot) |
 | 2 | OpenAI vision runs the **Nestal Fractal** brain (`nestal_prompt.py`) |
-| 3 | The model answers only: **LONG**, **SHORT**, or **NO TRADE** + entry / TP / SL / confidence % |
-| 4 | If confidence ≥ 65% and geometry is valid → **Hyperliquid** places the trade (live by default) |
+| 3 | The model answers only: **LONG**, **SHORT**, or **NO TRADE** + entry / TP / SL |
+| 4 | Bot computes **confidence** from 5m candles; trades only if ≥ 65% and Nestal rules pass → **Hyperliquid** |
 | 5 | While a position is open → monitor only (SL/TP on exchange); no new screenshots until flat |
 
-There is **no** local fractal math, **no** TradingView webhooks, and **no** alternate signal modes — **OpenAI + your chart screenshot is the only signal source.**
+There is **no** TradingView webhooks and **no** alternate signal modes — **OpenAI vision picks direction and prices; the bot enforces Nestal gates in code.**
 
 ---
 
@@ -39,9 +39,9 @@ There is **no** local fractal math, **no** TradingView webhooks, and **no** alte
 
 Default instructions live in `nestal_prompt.py`. The model:
 
-- Compares **micro** (current chart), **meso** (15m), and **macro** (1h) trend alignment  
-- Scores **fractal fidelity** (min 70% to trade)  
-- Computes **confidence** (min 65% to trade; bot rejects lower values)  
+- Compares **micro** trend on the **5m** chart only (no separate 15m/1h panels)
+- Scores **fractal fidelity** (min 70% to trade) — computed in `nestal_score.py`
+- Computes **confidence** (min 65% to trade) — **never from the AI reply**; bot calculates from candles
 - Uses **pattern size** for SL (1×) and TP (2×) → **2:1** risk/reward  
 - Asks itself: **"Would you long or short here?"** on every screenshot (**Simple Question, Simple Answer** — no essays in the reply)  
 
@@ -60,18 +60,12 @@ Take Profit:
 
 Stop Loss:
 3475.50
-
-Confidence:
-89%
 ```
 
 Or when rules fail:
 
 ```
 NO TRADE
-
-Confidence:
-58%
 
 Reason:
 Low fractal fidelity
@@ -118,7 +112,7 @@ LIVE_TRADING=true
 ARVOR_CONFIRM_LIVE_RISK=true
 HYPERLIQUID_PRIVATE_KEY=0x...
 HYPERLIQUID_WALLET_ADDRESS=0x...
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-5.2
 SCREENSHOT_WAIT_MS=18000
 ```
 
@@ -135,11 +129,13 @@ SCREENSHOT_WAIT_MS=18000
 ```
 Hyperliquid ETH Bot starting — mode: LIVE | signals: AI vision
 LIVE TRADING ENABLED — real funds at risk
-Chart scan every 60s → OpenAI (gpt-4o) → Hyperliquid execution
+Chart scan every 60s → OpenAI (GPT-5.2) → Hyperliquid execution
 Cycle 1 — running...
 Screenshot saved: ...
-AI decision: NO_TRADE
-AI confidence: 58%
+OpenAI vision request (model=gpt-5.2)
+AI decision: NO_TRADE (model=gpt-5.2-2025-12-11)
+Computed confidence: 52.3%
+Nestal score (computed): micro=Bearish fidelity=80.5% ...
 ```
 
 `NO_TRADE` on most cycles is normal — Nestal is designed for **fewer, higher-quality** signals.
@@ -157,7 +153,7 @@ AI confidence: 58%
 | `HYPERLIQUID_WALLET_ADDRESS` | Live | Main `0x` wallet address |
 | `ARVOR_CONFIRM_LIVE_RISK` | Live | Must be `true` when live |
 | `LIVE_TRADING` | — | Default `true`; set `false` for paper |
-| `OPENAI_MODEL` | — | Default `gpt-4o` |
+| `OPENAI_MODEL` | — | Default `gpt-5.2` |
 | `AI_PROMPT` | — | Override `nestal_prompt.py` |
 | `SCREENSHOT_WAIT_MS` | — | Chart load wait (default `18000`) |
 | `CHART_STORAGE_STATE_PATH` | — | Playwright login state JSON |
@@ -195,6 +191,7 @@ No Hyperliquid keys required. Paper balance defaults to $10,000 (`PAPER_STARTING
 ```
 ├── main.py              # 60s loop
 ├── nestal_prompt.py     # Nestal Fractal AI instructions
+├── nestal_score.py      # Computed fidelity/confidence from 5m candles
 ├── ai_analyzer.py       # OpenAI vision + response parser
 ├── screenshot.py        # Playwright chart capture
 ├── trade_executor.py    # AI signal → Hyperliquid orders
@@ -218,7 +215,8 @@ No Hyperliquid keys required. Paper balance defaults to $10,000 (`PAPER_STARTING
 | `ARVOR_CONFIRM_LIVE_RISK` | Set to `true` for live |
 | Screenshot / 403 / login page | Set `CHART_SOURCE=hyperliquid` (no TradingView needed) |
 | `NO_TRADE` every cycle | Normal — low fidelity / misaligned trends |
-| Confidence below 65% | Bot blocks trade even if model says LONG/SHORT |
+| Model returns canned confidence (58/60/65) | Harmless — bot ignores AI confidence; uses `nestal_score.py` |
+| Computed confidence below 65% | Bot blocks trade even if model says LONG/SHORT |
 | Playwright locally | `pip install -r requirements.txt && playwright install chromium` |
 
 ---

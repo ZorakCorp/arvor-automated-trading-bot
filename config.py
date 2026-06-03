@@ -172,7 +172,7 @@ def load_settings() -> Settings:
         ai_prompt=ai_prompt,
         live_trading=live,
         hyperliquid_testnet=testnet,
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o").strip() or "gpt-4o",
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.2").strip() or "gpt-5.2",
         paper_starting_balance=_env_float("PAPER_STARTING_BALANCE", 10000.0, 1.0, 1_000_000_000.0),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         screenshot_wait_ms=_env_int("SCREENSHOT_WAIT_MS", 18000, 8000, 120_000),

@@ -6,18 +6,22 @@ import base64
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
 
 from config import Settings
+from nestal_score import (
+    MIN_FRACTAL_FIDELITY,
+    MIN_TRADE_CONFIDENCE,
+    NestalScore,
+    SUSPICIOUS_AI_CONFIDENCE,
+)
 from security_utils import MAX_SCREENSHOT_BYTES, validate_eth_price
 
 logger = logging.getLogger(__name__)
-
-MIN_TRADE_CONFIDENCE = 65.0
 
 # Nestal structured output (labels may be on same line or next line)
 _RE_ACTION = re.compile(r"\b(LONG|SHORT|NO\s*TRADE)\b", re.IGNORECASE)
@@ -39,6 +43,7 @@ class TradeSignal:
     confidence: float | None = None
     reasoning: str = ""
     raw_response: str = ""
+    model_used: str = ""
 
 
 def _parse_price(raw: str) -> float:
@@ -93,19 +98,6 @@ def parse_nestal_response(raw: str) -> TradeSignal | None:
     except (ValueError, TypeError) as exc:
         logger.error("Invalid prices in Nestal response: %s", exc)
         return None
-
-    if confidence is not None and confidence < MIN_TRADE_CONFIDENCE:
-        logger.warning(
-            "Nestal confidence %.1f%% below minimum %.0f%% — NO_TRADE",
-            confidence,
-            MIN_TRADE_CONFIDENCE,
-        )
-        return TradeSignal(
-            action="NO_TRADE",
-            confidence=confidence,
-            reasoning=f"Confidence {confidence:.0f}% below {MIN_TRADE_CONFIDENCE:.0f}%",
-            raw_response=raw,
-        )
 
     if action == "LONG":
         if not (stop_loss < entry < take_profit):
@@ -186,14 +178,6 @@ def parse_trade_signal(data: dict[str, Any], raw: str = "") -> TradeSignal | Non
         logger.error("Missing or invalid price fields: %s", exc)
         return None
 
-    if confidence is not None and confidence < MIN_TRADE_CONFIDENCE:
-        return TradeSignal(
-            action="NO_TRADE",
-            confidence=confidence,
-            reasoning=reasoning or f"Confidence {confidence:.0f}% below minimum",
-            raw_response=raw,
-        )
-
     if action == "LONG":
         if not (stop_loss < entry < take_profit):
             logger.error("LONG: expected stop_loss < entry < take_profit")
@@ -211,6 +195,72 @@ def parse_trade_signal(data: dict[str, Any], raw: str = "") -> TradeSignal | Non
         reasoning=reasoning,
         raw_response=raw,
     )
+
+
+def apply_nestal_score(signal: TradeSignal, score: NestalScore) -> TradeSignal:
+    """Gate trades using computed Nestal metrics — never AI-reported confidence."""
+    ai_confidence = signal.confidence
+    computed = score.confidence_for(signal.action)
+
+    if ai_confidence is not None:
+        if ai_confidence in SUSPICIOUS_AI_CONFIDENCE:
+            logger.warning(
+                "Ignoring AI confidence %.0f%% (known canned value) — using computed %.1f%%",
+                ai_confidence,
+                computed,
+            )
+        elif abs(ai_confidence - computed) > 20.0:
+            logger.info(
+                "AI confidence %.0f%% differs from computed %.1f%% — using computed",
+                ai_confidence,
+                computed,
+            )
+
+    if signal.action not in ("LONG", "SHORT"):
+        return TradeSignal(
+            action=signal.action,
+            confidence=computed,
+            reasoning=signal.reasoning,
+            raw_response=signal.raw_response,
+        )
+
+    blockers: list[str] = []
+    if signal.action == "LONG" and score.micro_trend != "Bullish":
+        blockers.append("micro trend not bullish")
+    elif signal.action == "SHORT" and score.micro_trend != "Bearish":
+        blockers.append("micro trend not bearish")
+    if score.fractal_fidelity < MIN_FRACTAL_FIDELITY:
+        blockers.append(f"fractal fidelity {score.fractal_fidelity:.0f}% < 70%")
+    if computed < MIN_TRADE_CONFIDENCE:
+        blockers.append(f"confidence {computed:.0f}% < 65%")
+
+    if blockers:
+        reason = "; ".join(blockers)
+        logger.warning("Nestal gate blocked %s — %s", signal.action, reason)
+        return TradeSignal(
+            action="NO_TRADE",
+            confidence=computed,
+            reasoning=reason,
+            raw_response=signal.raw_response,
+        )
+
+    return TradeSignal(
+        action=signal.action,
+        entry=signal.entry,
+        stop_loss=signal.stop_loss,
+        take_profit=signal.take_profit,
+        confidence=computed,
+        reasoning=signal.reasoning,
+        raw_response=signal.raw_response,
+    )
+
+
+def _chat_completion_kwargs(model: str) -> dict[str, Any]:
+    """Build API kwargs compatible with legacy and GPT-5.x models."""
+    uses_new_token_param = model.startswith(("chat-latest", "gpt-5", "o1", "o3", "o4"))
+    if uses_new_token_param:
+        return {"max_completion_tokens": 400}
+    return {"max_tokens": 400, "temperature": 0.0}
 
 
 def parse_ai_response(raw: str) -> TradeSignal | None:
@@ -247,10 +297,12 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
 
     client = OpenAI(api_key=settings.openai_api_key, timeout=120.0)
     prompt = settings.ai_prompt
+    model = settings.openai_model
+    logger.info("OpenAI vision request (model=%s)", model)
 
     try:
         response = client.chat.completions.create(
-            model=settings.openai_model,
+            model=model,
             messages=[
                 {
                     "role": "user",
@@ -266,34 +318,31 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
                     ],
                 }
             ],
-            max_tokens=400,
-            temperature=0.0,
+            **_chat_completion_kwargs(model),
         )
     except Exception as exc:
-        logger.error("OpenAI API call failed: %s", exc)
+        logger.error("OpenAI API call failed (model=%s): %s", model, exc)
         return None
 
     if not response.choices:
-        logger.error("OpenAI returned empty choices")
+        logger.error("OpenAI returned empty choices (model=%s)", model)
         return None
 
+    resolved_model = response.model or model
     raw = (response.choices[0].message.content or "").strip()
-    logger.debug("AI raw response: %s", raw[:300])
+    logger.debug("AI raw response (model=%s): %s", resolved_model, raw[:300])
 
-    sig = parse_ai_response(raw)
-    if sig is not None and sig.confidence in (58.0, 60.0, 65.0):
-        logger.warning(
-            "AI returned round confidence %.0f%% — may be a canned value; "
-            "verify prompt is latest (5m-only, no example 60%% in prompt)",
-            sig.confidence,
-        )
-    return sig
+    signal = parse_ai_response(raw)
+    if signal is None:
+        return None
+    return replace(signal, model_used=resolved_model)
 
 
 def log_signal_decision(signal: TradeSignal) -> None:
     """Log AI decision (minimal — no trade reasoning unless NO_TRADE)."""
-    logger.info("AI decision: %s", signal.action)
+    model_label = signal.model_used or "unknown"
+    logger.info("AI decision: %s (model=%s)", signal.action, model_label)
     if signal.confidence is not None:
-        logger.info("AI confidence: %.0f%%", signal.confidence)
+        logger.info("Computed confidence: %.1f%%", signal.confidence)
     if signal.action == "NO_TRADE" and signal.reasoning:
         logger.info("AI reason: %s", signal.reasoning)

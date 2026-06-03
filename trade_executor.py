@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ai_analyzer import TradeSignal, analyze_chart, log_signal_decision
+from ai_analyzer import TradeSignal, analyze_chart, apply_nestal_score, log_signal_decision
 from config import LEVERAGE, Settings
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
+from nestal_score import fetch_nestal_score
 from risk_manager import RiskManager
 from screenshot import capture_chart_screenshot, is_ai_blocked_page_reasoning
 from security_utils import redact_for_log
@@ -110,6 +111,11 @@ class TradeExecutor:
         )
 
     def _attempt_new_trade_from_screenshot(self, available_balance: float, mode: str) -> None:
+        nestal_score = fetch_nestal_score(self.client)
+        if nestal_score is None:
+            logger.error("Nestal score unavailable — no trade")
+            return
+
         screenshot_path = capture_chart_screenshot(self.settings, self.client)
         if screenshot_path is None:
             logger.error("Screenshot failed — no trade")
@@ -141,6 +147,7 @@ class TradeExecutor:
             self.risk.record_outcome("no_trade")
             return
 
+        signal = apply_nestal_score(signal, nestal_score)
         log_signal_decision(signal)
 
         if signal.action == "NO_TRADE":
