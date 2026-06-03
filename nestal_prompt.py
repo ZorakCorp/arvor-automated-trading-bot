@@ -49,87 +49,24 @@ Probability of continuation
 
 When everything aligns, generate a signal.
 
-TREND RULES
+TREND RULES (5-MINUTE CHART ONLY)
 
-The AI must compare 3 trend layers.
+You receive ONE 5m chart. There is no separate 15m or 1h panel.
 
-Micro Trend
+Micro trend (only trend layer for this chart):
 
-Current chart trend.
+Ask: "Is price higher than it was 10 candles ago?"
 
-Ask:
+If yes: Micro = Bullish
+If no: Micro = Bearish
 
-"Is price higher than it was 10 candles ago?"
+Use the trend label printed on the chart title when visible.
 
-If yes:
+For LONG: Micro must be Bullish.
+For SHORT: Micro must be Bearish.
+If micro trend is unclear: NO TRADE.
 
-Trend = Bullish
-
-If no:
-
-Trend = Bearish
-
-Meso Trend
-
-15 minute trend.
-
-Ask:
-
-"Is the 15 minute close higher than it was 5 candles ago?"
-
-If yes:
-
-Bullish
-
-If no:
-
-Bearish
-
-Macro Trend
-
-1 hour trend.
-
-Ask:
-
-"Is the 1 hour close higher than it was 3 candles ago?"
-
-If yes:
-
-Bullish
-
-If no:
-
-Bearish
-
-ALIGNMENT RULE
-
-All 3 trends must agree.
-
-Bullish Example:
-
-Micro = Bullish
-Meso = Bullish
-Macro = Bullish
-
-Result:
-
-Aligned = TRUE
-
-Bearish Example:
-
-Micro = Bearish
-Meso = Bearish
-Macro = Bearish
-
-Result:
-
-Aligned = TRUE
-
-Anything else:
-
-Aligned = FALSE
-
-No trade.
+Ignore meso (15m) and macro (1h) rules — that data is not in the image.
 
 FRACTAL FIDELITY
 
@@ -141,66 +78,24 @@ Think:
 
 Does this movement look like a smaller copy of a bigger movement?
 
-Score:
+Score 0-100% from pattern repetition on the chart (your estimate).
 
-0-100%
+Minimum required: 70%
+If below 70%: NO TRADE
 
-Examples
-
-Very random:
-
-30%
-
-Somewhat repeating:
-
-60%
-
-Strong repeating pattern:
-
-80%
-
-Nearly identical structure:
-
-95%
-
-Minimum required:
-
-70%
-
-If below 70%
-
-No trade.
+Do not use round placeholder values like 60 or 58 unless you calculated them from the formula below.
 
 CONFIDENCE SCORE
 
 Calculate confidence using:
 
-40% weight from fractal fidelity
-40% bonus if all trends align
-20% base confidence
+40% weight from fractal fidelity (your 0-100 score × 0.4)
+40% bonus if micro trend clearly supports the trade direction
+20% base
 
-Examples:
+Trade only if total is above 65.
 
-Fidelity = 80
-Alignment = Yes
-
-Confidence:
-
-80 × 0.4 = 32
-Alignment Bonus = 40
-Base = 20
-
-Total:
-
-92%
-
-Minimum confidence:
-
-65%
-
-Below 65%
-
-No trade.
+Do not copy example percentages from this prompt. Compute a unique value each time from the chart.
 
 SIGNAL FILTER
 
@@ -220,10 +115,9 @@ LONG RULES
 
 Generate LONG only when:
 
-Trend Alignment = TRUE
+Micro Trend = Bullish (5m)
 Fractal Fidelity > 70
 Confidence > 65
-Micro Trend = Bullish
 
 LONG Entry
 
@@ -261,10 +155,9 @@ SHORT RULES
 
 Generate SHORT only when:
 
-Trend Alignment = TRUE
+Micro Trend = Bearish (5m)
 Fractal Fidelity > 70
 Confidence > 65
-Micro Trend = Bearish
 
 SHORT Entry
 
@@ -330,9 +223,9 @@ AI DECISION PROCESS
 
 Before every trade ask:
 
-Are all trends aligned?
+Is micro trend clear on 5m and supporting direction?
 Is fractal fidelity above 70?
-Is confidence above 65?
+Is confidence above 65 (calculated, not a default number)?
 Is market structure clean?
 Is there enough room to TP?
 Is risk reward at least 2:1?
@@ -359,28 +252,28 @@ Stop Loss:
 Confidence:
 [number]%
 
-Example:
+Example format only (use your own calculated numbers):
 
 LONG
 
 Entry:
-102.50
+[price]
 
 Take Profit:
-106.50
+[price]
 
 Stop Loss:
-100.50
+[price]
 
 Confidence:
-89%
+[your calculated %]
 
 If conditions are weak:
 
 NO TRADE
 
 Confidence:
-[calculate from rules — do not copy any example number]
+[your calculated % — never reuse 60, 58, or 65 unless truly calculated]
 
 Reason:
 [one short reason under 10 words]
@@ -403,7 +296,12 @@ Ask yourself this one question using ONLY this 5m chart:
 
 "{SCREENSHOT_SELF_QUESTION}"
 
-Then apply the Nestal Fractal system below (5m data only — ignore meso/macro rules that need other timeframes).
+Then apply the Nestal Fractal system below (5m chart only).
+
+CRITICAL:
+* Only ONE timeframe in the image: 5m. Do not require 15m/1h alignment.
+* Compute confidence from the formula every cycle — never output a canned value like 60% or 58%.
+* If you would output NO_TRADE, still calculate a real confidence from fidelity + micro trend.
 
 IMPORTANT: Example numbers in this prompt are FORMAT ONLY. Never copy example confidence
 or prices. Calculate confidence from the rules using what you see on the 5m chart.

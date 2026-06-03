@@ -280,7 +280,14 @@ def analyze_chart(screenshot_path: Path, settings: Settings) -> TradeSignal | No
     raw = (response.choices[0].message.content or "").strip()
     logger.debug("AI raw response: %s", raw[:300])
 
-    return parse_ai_response(raw)
+    sig = parse_ai_response(raw)
+    if sig is not None and sig.confidence in (58.0, 60.0, 65.0):
+        logger.warning(
+            "AI returned round confidence %.0f%% — may be a canned value; "
+            "verify prompt is latest (5m-only, no example 60%% in prompt)",
+            sig.confidence,
+        )
+    return sig
 
 
 def log_signal_decision(signal: TradeSignal) -> None:
