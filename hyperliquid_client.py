@@ -461,7 +461,7 @@ class HyperliquidClient:
         take_profit: float,
         use_limit: bool = False,
     ) -> dict[str, Any]:
-        """Open ETH position with SL/TP. Rolls back entry if protection orders fail."""
+        """Open ETH position with AI entry/SL/TP. Rolls back entry if protection orders fail."""
         is_buy = side.upper() == "LONG"
         size = self.round_size(size)
         if size < self._min_order_size:
@@ -479,14 +479,13 @@ class HyperliquidClient:
 
         entry_result: dict[str, Any] | None = None
         filled_size = size
+        sl_px = self._round_price(stop_loss, is_buy=not is_buy)
+        tp_px = self._round_price(take_profit, is_buy=not is_buy)
         try:
-            sl_px = self._round_price(stop_loss, is_buy=not is_buy)
-            tp_px = self._round_price(take_profit, is_buy=not is_buy)
-
             if use_limit:
                 entry_px = self._round_price(entry_price, is_buy=is_buy)
                 logger.info(
-                    "Placing LIMIT entry at AI price $%.2f (SL $%.2f | TP $%.2f)",
+                    "Placing LIMIT entry at AI $%.2f | AI SL $%.2f | AI TP $%.2f",
                     entry_px,
                     sl_px,
                     tp_px,
@@ -527,15 +526,33 @@ class HyperliquidClient:
                     entry_price,
                 )
             else:
+                entry_px = self._round_price(entry_price, is_buy=is_buy)
+                logger.info(
+                    "Placing MARKET entry near AI $%.2f | AI SL $%.2f | AI TP $%.2f",
+                    entry_px,
+                    sl_px,
+                    tp_px,
+                )
                 entry_result = self._exchange.market_open(
                     COIN,
                     is_buy=is_buy,
                     sz=size,
+                    px=entry_price,
                     slippage=0.01,
                 )
                 if not self._order_ok(entry_result):
                     raise RuntimeError(
                         f"Entry order failed: {redact_for_log(str(entry_result))}"
+                    )
+                fill = self._extract_fill(entry_result)
+                if fill is not None:
+                    filled_size, avg_entry = fill
+                    filled_size = self.round_size(filled_size)
+                    entry_price = float(avg_entry)
+                    logger.info(
+                        "Market entry filled: size=%.4f ETH @ $%.2f",
+                        filled_size,
+                        entry_price,
                     )
 
             sl_result = self._place_trigger(is_buy, filled_size, sl_px, tpsl="sl")
@@ -608,6 +625,7 @@ class HyperliquidClient:
     def _place_trigger(
         self, was_buy: bool, size: float, trigger_px: float, tpsl: str
     ) -> dict:
+        """Place AI stop or take profit at the exact rounded trigger price."""
         is_buy = not was_buy
         px = self._round_price(trigger_px, is_buy=is_buy)
         sz = float(size)
