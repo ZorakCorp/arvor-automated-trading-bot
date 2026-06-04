@@ -55,7 +55,7 @@ The model picks direction and prices. The bot decides whether that pick is allow
 | Layer | Role |
 |-------|------|
 | **Vision** | Reads the chart; outputs LONG, SHORT, or NO TRADE + entry / TP / SL |
-| **Nestal score** | Computes fractal fidelity, micro trend, and confidence from the same 5m candles |
+| **Nestal score** | Computes 5m/15m/1h trends, fractal fidelity (5m), and confidence from Hyperliquid candles |
 | **Gates** | Blocks trades that fail hard rules — even if the model is confident |
 | **Execution** | Sizes from SL distance, places orders, journals every cycle |
 
@@ -69,22 +69,23 @@ Default instructions: `nestal_prompt.py`. Override entirely with `AI_PROMPT`.
 
 ### What the model sees
 
-- **Micro trend** on the **5m chart only** — no separate 15m / 1h panels
+- **Three panels**: 5m (micro), 15m (meso), 1h (macro) with trend labels and ALIGNED / NOT ALIGNED header
 - One question every cycle: *“Would you long or short here?”*
-- **Simple question, simple answer** — direction + prices, not essays
+- **Simple question, simple answer** — direction + prices on the **5m** panel, not essays
 
 ### What the bot enforces (in code)
 
 | Rule | Threshold | Source |
 |------|-----------|--------|
-| Fractal fidelity | ≥ 70% | `nestal_score.py` |
-| Trade confidence | ≥ 65% | `nestal_score.py` (never from AI reply) |
-| LONG | Micro trend must be **Bullish** | Same candles as the chart |
-| SHORT | Micro trend must be **Bearish** | Same candles as the chart |
-| SL / TP | 1× / 2× pattern size → **2:1 R:R** | Computed from recent range |
+| Trend alignment | 5m + 15m + 1h must agree | Always (`nestal_score.py`) |
+| LONG | All three **Bullish** (5m: 10 bars, 15m: 5 bars, 1h: 3 bars) | Hyperliquid candles |
+| SHORT | All three **Bearish** | Hyperliquid candles |
+| Fractal fidelity | ≥ 70% | When `NESTAL_GATES=true` |
+| Trade confidence | ≥ 65% | When `NESTAL_GATES=true` (never from AI reply) |
+| SL / TP | 1× / 2× pattern size → **2:1 R:R** | AI from 5m chart; optional code gates |
 
-Confidence formula: **40% fidelity + 40% trend alignment + 20% base**.  
-Fidelity and confidence are separate gates — high confidence does not bypass low fidelity.
+Confidence formula: **40% fidelity + 40% if all trends align + 20% base**.  
+With `NESTAL_GATES=false`, only multi-timeframe alignment is enforced in Python; fidelity/confidence are AI-judged.
 
 ### Example model output
 
@@ -124,7 +125,7 @@ cd arvor-automated-trading-bot
 CHART_SOURCE=hyperliquid
 ```
 
-Renders **ETH 5m candles** from Hyperliquid’s public API (`chart_image.py`).
+Renders **ETH 5m + 15m + 1h** panels from Hyperliquid’s public API (`chart_image.py`).
 
 **Optional** — TradingView screenshot with API fallback:
 
@@ -234,7 +235,7 @@ Paper balance defaults to **$10,000** (`PAPER_STARTING_BALANCE`).
 ├── nestal_prompt.py        # Nestal Fractal AI instructions
 ├── nestal_score.py         # Fidelity, trend, confidence from candles
 ├── ai_analyzer.py          # OpenAI vision + Nestal gates
-├── chart_image.py          # Hyperliquid 5m chart renderer
+├── chart_image.py          # Hyperliquid 5m / 15m / 1h chart renderer
 ├── screenshot.py           # Playwright chart capture (optional URL)
 ├── trade_executor.py       # Signal → Hyperliquid orders
 ├── trade_journal.py        # CSV journal per cycle

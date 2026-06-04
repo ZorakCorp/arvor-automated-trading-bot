@@ -142,15 +142,18 @@ class TradeExecutor:
             self.risk.record_outcome("no_trade")
             return
 
-        if self.settings.nestal_gates:
-            nestal_score = fetch_nestal_score(self.client)
-            if nestal_score is None:
-                logger.error("Nestal score unavailable — no trade")
-                return
-            signal = apply_nestal_score(signal, nestal_score)
-        else:
+        nestal_score = fetch_nestal_score(self.client)
+        if nestal_score is None:
+            logger.error("Nestal score unavailable — no trade")
+            return
+        signal = apply_nestal_score(
+            signal,
+            nestal_score,
+            full_gates=self.settings.nestal_gates,
+        )
+        if not self.settings.nestal_gates:
             logger.info(
-                "AI-only mode — executing vision decision without Nestal code gates"
+                "Nestal fidelity/confidence gates OFF — 5m/15m/1h trend alignment still enforced"
             )
 
         log_signal_decision(signal)

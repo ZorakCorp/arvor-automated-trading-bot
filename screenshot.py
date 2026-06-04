@@ -232,7 +232,7 @@ def _capture_url_screenshot(settings: Settings, output_path: Path) -> bool:
 
 
 def _capture_hyperliquid_api_chart(client: Any, output_path: Path) -> bool:
-    """Render 5m / 15m / 1h ETH candles from Hyperliquid (works on Railway)."""
+    """Render 5m + 15m + 1h ETH panels from Hyperliquid (works on Railway)."""
     if client is None:
         logger.error("Hyperliquid client required for API chart render")
         return False

@@ -197,8 +197,13 @@ def parse_trade_signal(data: dict[str, Any], raw: str = "") -> TradeSignal | Non
     )
 
 
-def apply_nestal_score(signal: TradeSignal, score: NestalScore) -> TradeSignal:
-    """Gate trades using computed Nestal metrics — never AI-reported confidence."""
+def apply_nestal_score(
+    signal: TradeSignal,
+    score: NestalScore,
+    *,
+    full_gates: bool = True,
+) -> TradeSignal:
+    """Apply Nestal rules from candle data — never AI-reported confidence for gating."""
     ai_confidence = signal.confidence
     computed = score.confidence_for(signal.action)
 
@@ -220,14 +225,16 @@ def apply_nestal_score(signal: TradeSignal, score: NestalScore) -> TradeSignal:
         return replace(signal, confidence=computed)
 
     blockers: list[str] = []
-    if signal.action == "LONG" and score.micro_trend != "Bullish":
-        blockers.append("micro trend not bullish")
-    elif signal.action == "SHORT" and score.micro_trend != "Bearish":
-        blockers.append("micro trend not bearish")
-    if score.fractal_fidelity < MIN_FRACTAL_FIDELITY:
-        blockers.append(f"fractal fidelity {score.fractal_fidelity:.0f}% < 70%")
-    if computed < MIN_TRADE_CONFIDENCE:
-        blockers.append(f"confidence {computed:.0f}% < 65%")
+    if signal.action in ("LONG", "SHORT") and not score.trends_aligned(signal.action):
+        blockers.append(
+            f"trend alignment false (5m={score.micro_trend} 15m={score.meso_trend} "
+            f"1h={score.macro_trend})"
+        )
+    if full_gates:
+        if score.fractal_fidelity < MIN_FRACTAL_FIDELITY:
+            blockers.append(f"fractal fidelity {score.fractal_fidelity:.0f}% < 70%")
+        if computed < MIN_TRADE_CONFIDENCE:
+            blockers.append(f"confidence {computed:.0f}% < 65%")
 
     if blockers:
         reason = "; ".join(blockers)

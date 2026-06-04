@@ -66,10 +66,13 @@ class TestChartImage(unittest.TestCase):
 
         from chart_image import render_hyperliquid_chart_image
 
+        step_ms = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000}
+
         def fake_candles(interval: str, limit: int) -> list[dict]:
+            step = step_ms.get(interval, 300_000)
             return [
                 {
-                    "t": i * 300_000,
+                    "t": i * step,
                     "o": str(3500 + i),
                     "h": str(3510 + i),
                     "l": str(3490 + i),
@@ -217,6 +220,8 @@ Stop Loss:
         sig = replace(sig, model_used="gpt-5.2-2025-12-11")
         score = NestalScore(
             micro_trend="Bullish",
+            meso_trend="Bullish",
+            macro_trend="Bullish",
             fractal_fidelity=55.0,
             pattern_size=25.0,
             last_close=3500.0,
@@ -245,6 +250,8 @@ Confidence:
         assert sig is not None
         score = NestalScore(
             micro_trend="Bearish",
+            meso_trend="Bearish",
+            macro_trend="Bearish",
             fractal_fidelity=85.0,
             pattern_size=20.0,
             last_close=3500.0,
@@ -260,10 +267,40 @@ Confidence:
             Bar(t=i * 300_000, open=3500 + i, high=3510 + i, low=3490 + i, close=3505 + i)
             for i in range(50)
         ]
-        score = compute_nestal_score(bars)
+        score = compute_nestal_score(
+            bars, meso_trend="Bullish", macro_trend="Bullish"
+        )
         assert score is not None
         self.assertEqual(score.micro_trend, "Bullish")
+        self.assertTrue(score.trends_aligned("LONG"))
         self.assertGreater(score.confidence_for("LONG"), score.confidence_for("SHORT"))
+
+    def test_apply_nestal_score_blocks_misaligned_timeframes(self) -> None:
+        sig = parse_nestal_response(
+            """LONG
+
+Entry:
+3500
+
+Take Profit:
+3600
+
+Stop Loss:
+3450"""
+        )
+        assert sig is not None
+        score = NestalScore(
+            micro_trend="Bullish",
+            meso_trend="Bearish",
+            macro_trend="Bearish",
+            fractal_fidelity=90.0,
+            pattern_size=25.0,
+            last_close=3500.0,
+            bar_count=100,
+        )
+        gated = apply_nestal_score(sig, score, full_gates=False)
+        self.assertEqual(gated.action, "NO_TRADE")
+        self.assertIn("alignment", gated.reasoning.lower())
 
     def test_parse_ai_response_prefers_nestal(self) -> None:
         raw = """SHORT

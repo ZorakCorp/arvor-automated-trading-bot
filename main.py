@@ -93,10 +93,11 @@ def main() -> None:
         settings.chart_source,
         settings.openai_model,
     )
+    log.info("Multi-TF trend alignment: ON (5m + 15m + 1h enforced in Python)")
     if settings.nestal_gates:
-        log.info("Nestal code gates: ON (fidelity/confidence enforced in Python)")
+        log.info("Nestal code gates: ON (fidelity/confidence also enforced in Python)")
     else:
-        log.info("Nestal code gates: OFF — AI vision decision is final")
+        log.info("Nestal fidelity/confidence gates: OFF — AI sets levels; alignment still required")
     log.info("=" * 60)
 
     client = HyperliquidClient(settings)
