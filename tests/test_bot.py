@@ -363,7 +363,7 @@ class TestRiskManager(unittest.TestCase):
         assert result is not None
         self.assertLessEqual(result.margin_required_usd, 49.04 * 0.90 + 0.01)
 
-    def test_daily_loss_block(self) -> None:
+    def test_daily_and_weekly_loss_do_not_block(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             import config as cfg
 
@@ -371,8 +371,21 @@ class TestRiskManager(unittest.TestCase):
             with patch.object(cfg, "RISK_STATE_PATH", risk_path):
                 rm = RiskManager()
                 rm.sync_balance(10_000.0)
-                allowed, _ = rm.can_trade(8_900.0)
-        self.assertFalse(allowed)
+                allowed, reason = rm.can_trade(8_900.0)
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+
+    def test_large_drawdown_still_allows_trade(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            import config as cfg
+
+            risk_path = Path(td) / "risk.json"
+            with patch.object(cfg, "RISK_STATE_PATH", risk_path):
+                rm = RiskManager()
+                rm.sync_balance(10_000.0)
+                allowed, reason = rm.can_trade(2_900.0)
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
 
 
 class TestHyperliquidPaper(unittest.TestCase):

@@ -211,7 +211,7 @@ Applied after any AI signal passes Nestal gates:
 | Leverage | 15× |
 | Risk per trade | 50% of available balance (sized from SL distance) |
 | Cooldown | 30 minutes after a closed trade |
-| Loss limits | Daily / weekly / monthly caps in `risk_manager.py` |
+| Loss limits | None — only requires balance > $0 |
 
 ---
 

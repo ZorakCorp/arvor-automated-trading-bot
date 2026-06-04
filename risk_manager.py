@@ -1,4 +1,4 @@
-"""Position sizing and daily/weekly/monthly loss limits."""
+"""Position sizing and win-rate tracking."""
 
 from __future__ import annotations
 
@@ -7,13 +7,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from config import (
-    DAILY_MAX_LOSS_FRACTION,
     LEVERAGE,
     MARGIN_UTILIZATION_MAX,
-    MONTHLY_MAX_LOSS_FRACTION,
     RISK_FRACTION,
     RISK_STATE_PATH,
-    WEEKLY_MAX_LOSS_FRACTION,
 )
 from security_utils import atomic_write_json, load_json_file
 
@@ -131,24 +128,6 @@ class RiskManager:
 
         if self._state is None:
             self.sync_balance(current_balance)
-            return True, ""
-
-        day_loss = (self._state.day_start_balance - current_balance) / max(
-            self._state.day_start_balance, 1e-9
-        )
-        week_loss = (self._state.week_start_balance - current_balance) / max(
-            self._state.week_start_balance, 1e-9
-        )
-        month_loss = (self._state.month_start_balance - current_balance) / max(
-            self._state.month_start_balance, 1e-9
-        )
-
-        if day_loss >= DAILY_MAX_LOSS_FRACTION:
-            return False, f"Daily max loss reached ({day_loss:.1%})"
-        if week_loss >= WEEKLY_MAX_LOSS_FRACTION:
-            return False, f"Weekly max loss reached ({week_loss:.1%})"
-        if month_loss >= MONTHLY_MAX_LOSS_FRACTION:
-            return False, f"Monthly max loss reached ({month_loss:.1%})"
 
         return True, ""
 

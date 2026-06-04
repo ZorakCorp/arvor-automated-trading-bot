@@ -37,9 +37,6 @@ LEVERAGE = 15
 RISK_FRACTION = 0.50
 # Cap margin used for entry so Hyperliquid does not reject with "Insufficient margin".
 MARGIN_UTILIZATION_MAX = 0.90
-DAILY_MAX_LOSS_FRACTION = 0.10
-WEEKLY_MAX_LOSS_FRACTION = 0.70
-MONTHLY_MAX_LOSS_FRACTION = 0.70
 COOLDOWN_MINUTES = 30
 # Align scans to UTC 5m candle closes (:00, :05, :10, …) + buffer for exchange finalize
 CANDLE_CLOSE_BUFFER_SECONDS = 3
