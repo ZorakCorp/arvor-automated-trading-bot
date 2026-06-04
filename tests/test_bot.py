@@ -60,11 +60,25 @@ def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
 
 
 class TestChartImage(unittest.TestCase):
+    def test_price_ylim_adds_padding(self) -> None:
+        from chart_image import CHART_Y_PADDING_FRACTION, _price_ylim
+        from nestal_score import Bar
+
+        bars = [
+            Bar(t=0, open=100.0, high=110.0, low=90.0, close=105.0),
+            Bar(t=1, open=105.0, high=115.0, low=95.0, close=100.0),
+        ]
+        y_lo, y_hi = _price_ylim(bars)
+        span = 115.0 - 90.0
+        pad = span * CHART_Y_PADDING_FRACTION
+        self.assertAlmostEqual(y_lo, 90.0 - pad)
+        self.assertAlmostEqual(y_hi, 115.0 + pad)
+
     def test_render_hyperliquid_chart(self) -> None:
         import tempfile
         from unittest.mock import MagicMock
 
-        from chart_image import render_hyperliquid_chart_image
+        from chart_image import CHART_CANDLE_LIMIT, render_hyperliquid_chart_image
 
         def fake_candles(interval: str, limit: int) -> list[dict]:
             return [
@@ -85,6 +99,7 @@ class TestChartImage(unittest.TestCase):
             out = Path(td) / "chart.png"
             self.assertTrue(render_hyperliquid_chart_image(client, out))
             self.assertGreater(out.stat().st_size, 1000)
+            client.get_candles.assert_called_with("5m", CHART_CANDLE_LIMIT)
 
 
 class TestChartUrl(unittest.TestCase):
