@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from config import (
     DAILY_MAX_LOSS_FRACTION,
     LEVERAGE,
+    MARGIN_UTILIZATION_MAX,
     MONTHLY_MAX_LOSS_FRACTION,
     RISK_FRACTION,
     RISK_STATE_PATH,
@@ -175,16 +176,19 @@ class RiskManager:
         size_eth = risk_usd / stop_distance
         notional = size_eth * entry
         margin_required = notional / LEVERAGE
+        max_margin = available_balance * MARGIN_UTILIZATION_MAX
 
-        if margin_required > available_balance:
-            scale = available_balance / margin_required
+        if margin_required > max_margin:
+            scale = max_margin / margin_required
             size_eth *= scale
             notional = size_eth * entry
             margin_required = notional / LEVERAGE
             logger.warning(
-                "Position capped by margin: size=%.4f margin=%.2f",
+                "Position capped by margin: size=%.4f margin=%.2f (max %.0f%% of $%.2f available)",
                 size_eth,
                 margin_required,
+                MARGIN_UTILIZATION_MAX * 100,
+                available_balance,
             )
 
         size_eth = round_fn(size_eth)

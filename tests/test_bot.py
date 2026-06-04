@@ -349,6 +349,20 @@ class TestRiskManager(unittest.TestCase):
         assert result is not None
         self.assertGreater(result.size_eth, 0)
 
+    def test_position_size_respects_margin_headroom(self) -> None:
+        import config as cfg
+
+        with patch.object(cfg, "MARGIN_UTILIZATION_MAX", 0.90):
+            rm = RiskManager()
+            result = rm.calculate_position_size(
+                49.04,
+                entry=1793.60,
+                stop_loss=1782.20,
+                round_fn=lambda x: round(x, 4),
+            )
+        assert result is not None
+        self.assertLessEqual(result.margin_required_usd, 49.04 * 0.90 + 0.01)
+
     def test_daily_loss_block(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             import config as cfg

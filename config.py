@@ -35,6 +35,8 @@ COIN = "ETH"
 TIMEFRAME_MINUTES = 5
 LEVERAGE = 15
 RISK_FRACTION = 0.50
+# Cap margin used for entry so Hyperliquid does not reject with "Insufficient margin".
+MARGIN_UTILIZATION_MAX = 0.90
 DAILY_MAX_LOSS_FRACTION = 0.10
 WEEKLY_MAX_LOSS_FRACTION = 0.70
 MONTHLY_MAX_LOSS_FRACTION = 0.70
