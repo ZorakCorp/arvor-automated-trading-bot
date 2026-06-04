@@ -93,6 +93,10 @@ def main() -> None:
         settings.chart_source,
         settings.openai_model,
     )
+    if settings.nestal_gates:
+        log.info("Nestal code gates: ON (fidelity/confidence enforced in Python)")
+    else:
+        log.info("Nestal code gates: OFF — AI vision decision is final")
     log.info("=" * 60)
 
     client = HyperliquidClient(settings)

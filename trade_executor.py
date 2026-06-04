@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ai_analyzer import TradeSignal, analyze_chart, apply_nestal_score, log_raw_ai_signal, log_signal_decision
+from ai_analyzer import TradeSignal, analyze_chart, apply_nestal_score, log_signal_decision
 from config import LEVERAGE, Settings
 from cooldown import CooldownManager
 from hyperliquid_client import HyperliquidClient
@@ -111,11 +111,6 @@ class TradeExecutor:
         )
 
     def _attempt_new_trade_from_screenshot(self, available_balance: float, mode: str) -> None:
-        nestal_score = fetch_nestal_score(self.client)
-        if nestal_score is None:
-            logger.error("Nestal score unavailable — no trade")
-            return
-
         screenshot_path = capture_chart_screenshot(self.settings, self.client)
         if screenshot_path is None:
             logger.error("Screenshot failed — no trade")
@@ -147,8 +142,17 @@ class TradeExecutor:
             self.risk.record_outcome("no_trade")
             return
 
-        log_raw_ai_signal(signal)
-        signal = apply_nestal_score(signal, nestal_score)
+        if self.settings.nestal_gates:
+            nestal_score = fetch_nestal_score(self.client)
+            if nestal_score is None:
+                logger.error("Nestal score unavailable — no trade")
+                return
+            signal = apply_nestal_score(signal, nestal_score)
+        else:
+            logger.info(
+                "AI-only mode — executing vision decision without Nestal code gates"
+            )
+
         log_signal_decision(signal)
 
         if signal.action == "NO_TRADE":
@@ -215,7 +219,7 @@ class TradeExecutor:
             source_label,
         )
         if signal.confidence is not None:
-            logger.info("Nestal confidence: %.0f%%", signal.confidence)
+            logger.info("AI confidence: %.0f%%", signal.confidence)
 
         try:
             self.client.set_leverage()

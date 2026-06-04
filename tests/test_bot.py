@@ -55,6 +55,7 @@ def _paper_settings(tmp: Path, balance: float = 10_000.0) -> Settings:
         auto_spot_to_perp=False,
         chart_storage_state_path=None,
         chart_source="hyperliquid",
+        nestal_gates=False,
     )
 
 
@@ -514,16 +515,6 @@ class TestTradeExecutorCycle(unittest.TestCase):
                     patch(
                         "trade_executor.capture_chart_screenshot",
                         return_value=fake_png,
-                    ),
-                    patch(
-                        "trade_executor.fetch_nestal_score",
-                        return_value=NestalScore(
-                            micro_trend="Bullish",
-                            fractal_fidelity=80.0,
-                            pattern_size=20.0,
-                            last_close=3500.0,
-                            bar_count=100,
-                        ),
                     ),
                     patch(
                         "trade_executor.analyze_chart",

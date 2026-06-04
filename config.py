@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from nestal_prompt import build_default_ai_prompt
+from nestal_prompt import build_ai_only_prompt, build_default_ai_prompt
 from security_utils import (
     validate_chart_url,
     validate_eth_wallet_address,
@@ -47,7 +47,9 @@ LOOP_INTERVAL_SECONDS = TIMEFRAME_MINUTES * 60
 ETH_SIZE_DECIMALS = 4
 MIN_ETH_ORDER_SIZE = 0.001
 
-DEFAULT_AI_PROMPT = build_default_ai_prompt()
+def default_ai_prompt(*, nestal_gates: bool) -> str:
+    """Default vision prompt for gated vs AI-only mode."""
+    return build_default_ai_prompt() if nestal_gates else build_ai_only_prompt()
 
 _PLACEHOLDER_CHART_RE = re.compile(r"/chart/\.\.\.|/chart/\.\.\./", re.IGNORECASE)
 
@@ -107,6 +109,7 @@ class Settings:
     auto_spot_to_perp: bool
     chart_storage_state_path: Path | None
     chart_source: str
+    nestal_gates: bool
 
     @property
     def is_paper(self) -> bool:
@@ -168,7 +171,8 @@ def load_settings() -> Settings:
     elif chart_url_raw and not is_placeholder_chart_url(chart_url_raw):
         chart_url = validate_chart_url(chart_url_raw)
 
-    ai_prompt = os.getenv("AI_PROMPT", "").strip() or DEFAULT_AI_PROMPT
+    nestal_gates = _env_bool("NESTAL_GATES", default=False)
+    ai_prompt = os.getenv("AI_PROMPT", "").strip() or default_ai_prompt(nestal_gates=nestal_gates)
 
     if live:
         if not _env_bool("ARVOR_CONFIRM_LIVE_RISK", default=False):
@@ -211,6 +215,7 @@ def load_settings() -> Settings:
         ),
         chart_storage_state_path=storage_path,
         chart_source=chart_source,
+        nestal_gates=nestal_gates,
     )
 
 

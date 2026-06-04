@@ -266,8 +266,12 @@ Reason:
 """
 
 
-def build_default_ai_prompt() -> str:
-    """Full prompt sent with each chart screenshot."""
+def _chart_screenshot_preamble(*, ai_decision_final: bool) -> str:
+    enforcement = (
+        "Your LONG / SHORT / NO TRADE decision is final — the bot executes it without code overrides."
+        if ai_decision_final
+        else "Do NOT include Confidence in your reply — the bot computes it from Hyperliquid candles."
+    )
     return f"""You have received a screenshot of a live ETH chart from Hyperliquid.
 
 CHART DATA: **5-MINUTE candles only.** One chart panel — ETH 5m from Hyperliquid API.
@@ -286,7 +290,7 @@ Then apply the Nestal Fractal system below (5m chart only).
 
 CRITICAL:
 * Only ONE timeframe in the image: 5m. Do not require 15m/1h alignment.
-* Do NOT include Confidence in your reply — the bot computes it from Hyperliquid candles.
+* {enforcement}
 * Focus on direction and Entry / Take Profit / Stop Loss only.
 
 IMPORTANT: Example numbers in this prompt are FORMAT ONLY. Never copy example prices.
@@ -296,3 +300,13 @@ Follow the rule: Simple Question, Simple Answer. No commentary outside the requi
 
 {NESTAL_FRACTAL_SYSTEM.strip()}
 """
+
+
+def build_default_ai_prompt() -> str:
+    """Full prompt with code-enforced Nestal gates (confidence computed in bot)."""
+    return _chart_screenshot_preamble(ai_decision_final=False)
+
+
+def build_ai_only_prompt() -> str:
+    """Full prompt when OpenAI vision is the sole trade gate."""
+    return _chart_screenshot_preamble(ai_decision_final=True)
