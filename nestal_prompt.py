@@ -49,9 +49,9 @@ Probability of continuation
 
 When everything aligns, generate a signal.
 
-TREND RULES (3 CHART PANELS)
+TREND RULES (2 CHART PANELS)
 
-You receive THREE panels: 5m (micro), 15m (meso), 1h (macro). Each panel title shows its trend.
+You receive TWO panels: 5m (micro) and 15m (meso). Each panel title shows its trend.
 
 Micro trend (5m chart):
 
@@ -67,21 +67,14 @@ Ask: "Is the 15m close higher than it was 5 candles ago?"
 If yes: Meso = Bullish
 If no: Meso = Bearish
 
-Macro trend (1h chart):
-
-Ask: "Is the 1h close higher than it was 3 candles ago?"
-
-If yes: Macro = Bullish
-If no: Macro = Bearish
-
 ALIGNMENT RULE
 
-All 3 trends must agree (Bullish or Bearish). If mixed: NO TRADE.
+Both trends must agree (Bullish or Bearish). If mixed: NO TRADE.
 
-Use the chart header (5m / 15m / 1h labels and ALIGNED / NOT ALIGNED).
+Use the chart header (5m / 15m labels and ALIGNED / NOT ALIGNED).
 
-For LONG: all three = Bullish.
-For SHORT: all three = Bearish.
+For LONG: 5m and 15m = Bullish.
+For SHORT: 5m and 15m = Bearish.
 
 FRACTAL FIDELITY
 
@@ -103,7 +96,7 @@ CONFIDENCE SCORE (computed by the bot — do not output)
 The trading bot calculates confidence from Hyperliquid candles using:
 
 40% weight from fractal fidelity (5m)
-40% bonus if all three trends align with your direction
+40% bonus if 5m and 15m trends align with your direction
 20% base
 
 Trade only if total is above 65 (enforced in code).
@@ -126,7 +119,7 @@ LONG RULES
 
 Generate LONG only when:
 
-All trends aligned Bullish (5m + 15m + 1h)
+5m and 15m aligned Bullish
 Fractal Fidelity > 70
 Confidence > 65
 
@@ -166,7 +159,7 @@ SHORT RULES
 
 Generate SHORT only when:
 
-All trends aligned Bearish (5m + 15m + 1h)
+5m and 15m aligned Bearish
 Fractal Fidelity > 70
 Confidence > 65
 
@@ -234,7 +227,7 @@ AI DECISION PROCESS
 
 Before every trade ask:
 
-Are all three trends aligned with your direction?
+Are 5m and 15m trends aligned with your direction?
 Is fractal fidelity above 70?
 Is market structure clean?
 Is there enough room to TP?
@@ -289,23 +282,23 @@ def _chart_screenshot_preamble(*, ai_decision_final: bool) -> str:
     )
     return f"""You have received a screenshot of a live ETH chart from Hyperliquid.
 
-CHART DATA: **Three panels** — ETH **5m** (top), **15m** (middle), **1h** (bottom) from Hyperliquid API.
-The main title shows 5m/15m/1h trends and whether they are ALIGNED.
+CHART DATA: **Two panels** — ETH **5m** (top) and **15m** (bottom) from Hyperliquid API.
+The main title shows 5m/15m trends and whether they are ALIGNED.
 
 Use the charts as follows:
-* Trend alignment: read 5m, 15m, and 1h trend labels — all must agree for LONG or SHORT
+* Trend alignment: read 5m and 15m trend labels — both must agree for LONG or SHORT
 * Pattern size, entry, stop loss, take profit: from the **5m** panel price action
-* Fractal fidelity: repeating structure across timeframes (especially 5m vs higher panels)
+* Fractal fidelity: repeating structure across 5m vs 15m panels
 
-Ask yourself this one question using the full multi-timeframe chart:
+Ask yourself this one question using both panels:
 
 "{SCREENSHOT_SELF_QUESTION}"
 
 Then apply the Nestal Fractal system below.
 
 CRITICAL:
-* LONG only if 5m, 15m, and 1h are all Bullish. SHORT only if all Bearish. Otherwise NO TRADE.
-* The bot also enforces this alignment in code — do not trade against higher timeframes.
+* LONG only if 5m and 15m are both Bullish. SHORT only if both Bearish. Otherwise NO TRADE.
+* The bot also enforces 5m/15m alignment in code — do not trade against the 15m trend.
 * {enforcement}
 * Focus on direction and Entry / Take Profit / Stop Loss only.
 

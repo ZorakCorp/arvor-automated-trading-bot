@@ -153,7 +153,7 @@ class TradeExecutor:
         )
         if not self.settings.nestal_gates:
             logger.info(
-                "Nestal fidelity/confidence gates OFF — 5m/15m/1h trend alignment still enforced"
+                "Nestal fidelity/confidence gates OFF — 5m/15m trend alignment still enforced"
             )
 
         log_signal_decision(signal)

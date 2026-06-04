@@ -66,7 +66,7 @@ class TestChartImage(unittest.TestCase):
 
         from chart_image import render_hyperliquid_chart_image
 
-        step_ms = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000}
+        step_ms = {"5m": 300_000, "15m": 900_000}
 
         def fake_candles(interval: str, limit: int) -> list[dict]:
             step = step_ms.get(interval, 300_000)
@@ -221,7 +221,6 @@ Stop Loss:
         score = NestalScore(
             micro_trend="Bullish",
             meso_trend="Bullish",
-            macro_trend="Bullish",
             fractal_fidelity=55.0,
             pattern_size=25.0,
             last_close=3500.0,
@@ -251,7 +250,6 @@ Confidence:
         score = NestalScore(
             micro_trend="Bearish",
             meso_trend="Bearish",
-            macro_trend="Bearish",
             fractal_fidelity=85.0,
             pattern_size=20.0,
             last_close=3500.0,
@@ -267,9 +265,7 @@ Confidence:
             Bar(t=i * 300_000, open=3500 + i, high=3510 + i, low=3490 + i, close=3505 + i)
             for i in range(50)
         ]
-        score = compute_nestal_score(
-            bars, meso_trend="Bullish", macro_trend="Bullish"
-        )
+        score = compute_nestal_score(bars, meso_trend="Bullish")
         assert score is not None
         self.assertEqual(score.micro_trend, "Bullish")
         self.assertTrue(score.trends_aligned("LONG"))
@@ -292,7 +288,6 @@ Stop Loss:
         score = NestalScore(
             micro_trend="Bullish",
             meso_trend="Bearish",
-            macro_trend="Bearish",
             fractal_fidelity=90.0,
             pattern_size=25.0,
             last_close=3500.0,

@@ -227,8 +227,7 @@ def apply_nestal_score(
     blockers: list[str] = []
     if signal.action in ("LONG", "SHORT") and not score.trends_aligned(signal.action):
         blockers.append(
-            f"trend alignment false (5m={score.micro_trend} 15m={score.meso_trend} "
-            f"1h={score.macro_trend})"
+            f"trend alignment false (5m={score.micro_trend} 15m={score.meso_trend})"
         )
     if full_gates:
         if score.fractal_fidelity < MIN_FRACTAL_FIDELITY:

@@ -232,7 +232,7 @@ def _capture_url_screenshot(settings: Settings, output_path: Path) -> bool:
 
 
 def _capture_hyperliquid_api_chart(client: Any, output_path: Path) -> bool:
-    """Render 5m + 15m + 1h ETH panels from Hyperliquid (works on Railway)."""
+    """Render 5m + 15m ETH panels from Hyperliquid (works on Railway)."""
     if client is None:
         logger.error("Hyperliquid client required for API chart render")
         return False
@@ -247,7 +247,7 @@ def capture_chart_screenshot(
     Produce a chart PNG for OpenAI vision.
 
     CHART_SOURCE:
-      - hyperliquid: API-rendered 5m/15m/1h panels only
+      - hyperliquid: API-rendered 5m/15m panels only
       - url: Playwright CHART_URL only
       - auto (default): try URL if set, then Hyperliquid API fallback
     """
@@ -282,7 +282,7 @@ def capture_chart_screenshot(
                 "or use CHART_SOURCE=auto / hyperliquid"
             )
             return None
-        logger.warning("URL chart failed — using Hyperliquid API chart (5m/15m/1h)")
+        logger.warning("URL chart failed — using Hyperliquid API chart (5m/15m)")
 
     if _capture_hyperliquid_api_chart(client, output_path):
         return output_path

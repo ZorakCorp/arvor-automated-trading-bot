@@ -1,4 +1,4 @@
-"""Render ETH 5m / 15m / 1h charts from Hyperliquid candles (no TradingView)."""
+"""Render ETH 5m and 15m charts from Hyperliquid candles (no TradingView)."""
 
 from __future__ import annotations
 
@@ -10,25 +10,21 @@ from typing import Any
 from nestal_score import (
     CANDLE_LIMIT,
     INTERVAL,
-    MACRO_CANDLE_LIMIT,
-    MACRO_INTERVAL,
-    MACRO_TREND_LOOKBACK,
     MESO_CANDLE_LIMIT,
     MESO_INTERVAL,
     MESO_TREND_LOOKBACK,
     MICRO_TREND_LOOKBACK,
+    Bar,
     closed_bars,
     parse_candles,
     trend_label,
 )
-from nestal_score import Bar
 
 logger = logging.getLogger(__name__)
 
 CHART_PANELS: tuple[tuple[str, int, int], ...] = (
     (INTERVAL, CANDLE_LIMIT, MICRO_TREND_LOOKBACK),
     (MESO_INTERVAL, MESO_CANDLE_LIMIT, MESO_TREND_LOOKBACK),
-    (MACRO_INTERVAL, MACRO_CANDLE_LIMIT, MACRO_TREND_LOOKBACK),
 )
 
 
@@ -65,7 +61,7 @@ def _draw_candles(ax: Any, bars: list[Bar], *, title: str) -> None:
 
 
 def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
-    """Build a 5m / 15m / 1h PNG from Hyperliquid API for OpenAI vision."""
+    """Build a 5m + 15m PNG from Hyperliquid API for OpenAI vision."""
     try:
         import matplotlib
 
@@ -91,31 +87,28 @@ def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
         trend = trend_label(bars, lookback)
         panel_data.append((interval, bars, trend))
 
-    micro, meso, macro = (t[2] for t in panel_data)
-    aligned = micro == meso == macro and micro in ("Bullish", "Bearish")
+    micro, meso = (t[2] for t in panel_data)
+    aligned = micro == meso and micro in ("Bullish", "Bearish")
     alignment = f"ALIGNED {micro.upper()}" if aligned else "NOT ALIGNED"
 
     bars_5m = panel_data[0][1]
     closed_5m = closed_bars(bars_5m)
     last_5m = closed_5m[-1] if closed_5m else bars_5m[-1]
     logger.info(
-        "Chart 5m/15m/1h: %d/%d/%d bars | last 5m %s @ $%.2f | trends 5m=%s 15m=%s 1h=%s | %s",
+        "Chart 5m/15m: %d/%d bars | last 5m %s @ $%.2f | trends 5m=%s 15m=%s | %s",
         len(panel_data[0][1]),
         len(panel_data[1][1]),
-        len(panel_data[2][1]),
         _format_bar_time(last_5m.t),
         last_5m.close,
         micro,
         meso,
-        macro,
         alignment,
     )
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 12), facecolor="#1a1a2e")
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10), facecolor="#1a1a2e")
     labels = {
         INTERVAL: f"Micro (5m) — close vs {MICRO_TREND_LOOKBACK} bars ago",
         MESO_INTERVAL: f"Meso (15m) — close vs {MESO_TREND_LOOKBACK} bars ago",
-        MACRO_INTERVAL: f"Macro (1h) — close vs {MACRO_TREND_LOOKBACK} bars ago",
     }
     for ax, (interval, bars, trend) in zip(axes, panel_data, strict=True):
         _draw_candles(
@@ -125,9 +118,9 @@ def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
         )
 
     fig.suptitle(
-        f"Hyperliquid ETH — 5m + 15m + 1h | {alignment}\n"
+        f"Hyperliquid ETH — 5m + 15m | {alignment}\n"
         f"5m last closed: {_format_bar_time(last_5m.t)} @ ${last_5m.close:,.2f} | "
-        f"5m={micro} | 15m={meso} | 1h={macro}",
+        f"5m={micro} | 15m={meso}",
         color="#eeeeee",
         fontsize=12,
         y=0.995,
@@ -144,7 +137,7 @@ def render_hyperliquid_chart_image(client: Any, output_path: Path) -> bool:
         return False
 
     logger.info(
-        "Hyperliquid multi-TF chart rendered: %s (%d bytes)",
+        "Hyperliquid 5m/15m chart rendered: %s (%d bytes)",
         output_path,
         output_path.stat().st_size,
     )

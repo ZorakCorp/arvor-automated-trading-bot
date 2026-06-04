@@ -93,7 +93,7 @@ def main() -> None:
         settings.chart_source,
         settings.openai_model,
     )
-    log.info("Multi-TF trend alignment: ON (5m + 15m + 1h enforced in Python)")
+    log.info("Multi-TF trend alignment: ON (5m + 15m enforced in Python)")
     if settings.nestal_gates:
         log.info("Nestal code gates: ON (fidelity/confidence also enforced in Python)")
     else:

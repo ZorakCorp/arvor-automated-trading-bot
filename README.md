@@ -55,7 +55,7 @@ The model picks direction and prices. The bot decides whether that pick is allow
 | Layer | Role |
 |-------|------|
 | **Vision** | Reads the chart; outputs LONG, SHORT, or NO TRADE + entry / TP / SL |
-| **Nestal score** | Computes 5m/15m/1h trends, fractal fidelity (5m), and confidence from Hyperliquid candles |
+| **Nestal score** | Computes 5m/15m trends, fractal fidelity (5m), and confidence from Hyperliquid candles |
 | **Gates** | Blocks trades that fail hard rules — even if the model is confident |
 | **Execution** | Sizes from SL distance, places orders, journals every cycle |
 
@@ -69,7 +69,7 @@ Default instructions: `nestal_prompt.py`. Override entirely with `AI_PROMPT`.
 
 ### What the model sees
 
-- **Three panels**: 5m (micro), 15m (meso), 1h (macro) with trend labels and ALIGNED / NOT ALIGNED header
+- **Two panels**: 5m (micro) and 15m (meso) with trend labels and ALIGNED / NOT ALIGNED header
 - One question every cycle: *“Would you long or short here?”*
 - **Simple question, simple answer** — direction + prices on the **5m** panel, not essays
 
@@ -77,9 +77,9 @@ Default instructions: `nestal_prompt.py`. Override entirely with `AI_PROMPT`.
 
 | Rule | Threshold | Source |
 |------|-----------|--------|
-| Trend alignment | 5m + 15m + 1h must agree | Always (`nestal_score.py`) |
-| LONG | All three **Bullish** (5m: 10 bars, 15m: 5 bars, 1h: 3 bars) | Hyperliquid candles |
-| SHORT | All three **Bearish** | Hyperliquid candles |
+| Trend alignment | 5m + 15m must agree | Always (`nestal_score.py`) |
+| LONG | Both **Bullish** (5m: 10 bars, 15m: 5 bars) | Hyperliquid candles |
+| SHORT | Both **Bearish** | Hyperliquid candles |
 | Fractal fidelity | ≥ 70% | When `NESTAL_GATES=true` |
 | Trade confidence | ≥ 65% | When `NESTAL_GATES=true` (never from AI reply) |
 | SL / TP | 1× / 2× pattern size → **2:1 R:R** | AI from 5m chart; optional code gates |
@@ -125,7 +125,7 @@ cd arvor-automated-trading-bot
 CHART_SOURCE=hyperliquid
 ```
 
-Renders **ETH 5m + 15m + 1h** panels from Hyperliquid’s public API (`chart_image.py`).
+Renders **ETH 5m + 15m** panels from Hyperliquid’s public API (`chart_image.py`).
 
 **Optional** — TradingView screenshot with API fallback:
 
@@ -235,7 +235,7 @@ Paper balance defaults to **$10,000** (`PAPER_STARTING_BALANCE`).
 ├── nestal_prompt.py        # Nestal Fractal AI instructions
 ├── nestal_score.py         # Fidelity, trend, confidence from candles
 ├── ai_analyzer.py          # OpenAI vision + Nestal gates
-├── chart_image.py          # Hyperliquid 5m / 15m / 1h chart renderer
+├── chart_image.py          # Hyperliquid 5m / 15m chart renderer
 ├── screenshot.py           # Playwright chart capture (optional URL)
 ├── trade_executor.py       # Signal → Hyperliquid orders
 ├── trade_journal.py        # CSV journal per cycle
