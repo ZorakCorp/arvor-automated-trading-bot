@@ -388,6 +388,19 @@ class TestHyperliquidPaper(unittest.TestCase):
                 self.assertEqual(close["outcome"], "win")
                 self.assertFalse(client.has_open_position())
 
+    def test_round_price_passes_px_to_sdk(self) -> None:
+        from unittest.mock import MagicMock
+
+        client = HyperliquidClient(_paper_settings(Path(tempfile.mkdtemp())))
+        mock_exchange = MagicMock()
+        mock_exchange._slippage_price.return_value = 1768.3
+        client._exchange = mock_exchange
+
+        result = client._round_price(1768.3, is_buy=False)
+
+        self.assertEqual(result, 1768.3)
+        mock_exchange._slippage_price.assert_called_once_with("ETH", False, 0.0, 1768.3)
+
 
 class TestConfig(unittest.TestCase):
     def test_load_settings_requires_openai_and_chart(self) -> None:

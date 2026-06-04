@@ -480,11 +480,11 @@ class HyperliquidClient:
         entry_result: dict[str, Any] | None = None
         filled_size = size
         try:
-            sl_px = self._round_price(stop_loss)
-            tp_px = self._round_price(take_profit)
+            sl_px = self._round_price(stop_loss, is_buy=not is_buy)
+            tp_px = self._round_price(take_profit, is_buy=not is_buy)
 
             if use_limit:
-                entry_px = self._round_price(entry_price)
+                entry_px = self._round_price(entry_price, is_buy=is_buy)
                 logger.info(
                     "Placing LIMIT entry at AI price $%.2f (SL $%.2f | TP $%.2f)",
                     entry_px,
@@ -595,17 +595,21 @@ class HyperliquidClient:
             )
         self._clear_live_position_meta()
 
-    def _round_price(self, px: float) -> float:
-        """Round to Hyperliquid perp tick size (SDK-compatible)."""
+    def _round_price(self, px: float, *, is_buy: bool = True) -> float:
+        """Round to Hyperliquid perp tick size (SDK-compatible).
+
+        SDK signature is _slippage_price(name, is_buy, slippage, px) — px must be
+        the 4th argument. Passing px as is_buy used mid price (~2× with slippage=1).
+        """
         if self._exchange is None:
             return float(px)
-        return float(self._exchange._slippage_price(COIN, float(px), True, 0.0))
+        return float(self._exchange._slippage_price(COIN, is_buy, 0.0, float(px)))
 
     def _place_trigger(
         self, was_buy: bool, size: float, trigger_px: float, tpsl: str
     ) -> dict:
         is_buy = not was_buy
-        px = self._round_price(trigger_px)
+        px = self._round_price(trigger_px, is_buy=is_buy)
         sz = float(size)
         return self._exchange.order(
             COIN,
